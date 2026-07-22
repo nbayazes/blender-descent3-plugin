@@ -323,7 +323,7 @@ def _import_submodel(context, model: POFModel, sm: Submodel, collection, search_
         for poly, pof_face in zip(mesh.polygons, kept_faces):
             for loop_idx, fv in zip(poly.loop_indices, pof_face.vertices):
                 if loop_idx < len(uv_layer.data):
-                    uv_layer.data[loop_idx].uv = (fv.u, fv.v)
+                    uv_layer.data[loop_idx].uv = (fv.u, -fv.v)
 
     # Set vertex normals
     if len(sm.vertices) == len(mesh.vertices):

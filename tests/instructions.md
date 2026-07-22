@@ -1,1 +1,0 @@
-For the materials link a diffuse texture using the MaterialID in the same directory as the model
