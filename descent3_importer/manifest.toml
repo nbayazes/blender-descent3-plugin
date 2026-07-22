@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "descent3_importer"
+version = "1.0.0"
+name = "Descent 3 POF/OOF Importer/Exporter"
+tagline = "Import and export Descent 3 3D model files (POF/OOF format)"
+maintainer = "Descent Community"
+type = "add-on"
+
+[blender]
+version_min = "4.2.0"
+
+[permissions]
+files = "Import and export Descent 3 POF/OOF model files"
+
+[tags]
+"3d view"
+"import-export"
+"mesh"
