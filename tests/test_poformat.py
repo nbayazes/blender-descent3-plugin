@@ -176,9 +176,44 @@ class TestPOFWriter:
         writer.write_string("hello")
         stream.seek(0)
         length = struct.unpack("<i", stream.read(4))[0]
-        assert length == 5
-        data = stream.read(5)
-        assert data == b"hello"
+        assert length == 6
+        data = stream.read(6)
+        assert data == b"hello\x00"
+
+
+class TestStringNullTermination:
+    """Real Descent 3 OOF strings are length-prefixed with the length
+    *including* the trailing NUL. The reader must strip it; the writer adds it.
+    """
+
+    def _read(self, raw):
+        import io
+        return POFReader(io.BytesIO(raw)).read_string()
+
+    def test_reads_length_including_null(self):
+        # 14 == len("WarningStripe") + 1, exactly as seen in real .OOF files
+        raw = struct.pack("<i", 14) + b"WarningStripe\x00"
+        assert self._read(raw) == "WarningStripe"
+
+    def test_reads_without_null(self):
+        # Mock/test files omit the NUL; length equals the raw string length
+        raw = struct.pack("<i", 5) + b"hello"
+        assert self._read(raw) == "hello"
+
+    def test_writer_appends_null_and_counts_it(self):
+        import io
+        stream = io.BytesIO()
+        POFWriter(stream).write_string("hull")
+        data = stream.getvalue()
+        assert struct.unpack("<i", data[:4])[0] == 5  # 4 chars + NUL
+        assert data[4:] == b"hull\x00"
+
+    def test_write_read_roundtrip_has_no_trailing_null(self):
+        import io
+        stream = io.BytesIO()
+        POFWriter(stream).write_string("ConcussionMissile")
+        stream.seek(0)
+        assert POFReader(stream).read_string() == "ConcussionMissile"
 
 
 class TestParseMinimalCube:

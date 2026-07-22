@@ -27,9 +27,13 @@ from bpy.props import (
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 from mathutils import Vector, Matrix
 import os
+import logging
 
-# Relative import for the poformat module (same package)
+log = logging.getLogger(__name__)
+
+# Relative imports for sibling modules (same package)
 from . import poformat
+from .texutil import clean_texture_dir, find_texture_image
 from .poformat import (
     POFModel,
     Submodel,
@@ -84,6 +88,16 @@ class ImportPOF(bpy.types.Operator, ImportHelper):
         description="Import attach points as empty objects",
         default=True,
     )
+    texture_dir: StringProperty(
+        name="Texture Folder",
+        description=(
+            "Optional folder to search for texture images. Paste a path here "
+            "(a browse button cannot be shown while the import dialog is open). "
+            "If set, it is searched before the model's own folder. Leave empty "
+            "to use only the folder the model is in"
+        ),
+        default="",
+    )
 
     def execute(self, context):
         return import_pof(context, self.filepath, self)
@@ -92,13 +106,18 @@ class ImportPOF(bpy.types.Operator, ImportHelper):
         layout = self.layout
         layout.prop(self, "import_guns")
         layout.prop(self, "import_attach")
+        layout.prop(self, "texture_dir")
 
 
 def import_pof(context, filepath: str, operator=None):
     """Main import function."""
+    log.info("=== Importing POF: %s ===", filepath)
+    print(f"[Descent3] Importing: {filepath}")
+
     try:
         with open(filepath, "rb") as f:
             data = f.read()
+        log.info("Read %d bytes", len(data))
     except Exception as e:
         if operator:
             operator.report({"ERROR"}, f"Failed to read file: {e}")
@@ -111,29 +130,66 @@ def import_pof(context, filepath: str, operator=None):
             operator.report({"ERROR"}, f"Failed to parse POF: {e}")
         return {"CANCELLED"}
 
+    model_dir = os.path.dirname(os.path.abspath(filepath))
+
+    # Build the ordered list of directories to search for texture images.
+    # An explicit texture directory (if provided) takes priority, then the
+    # folder the model itself lives in.
+    search_dirs = []
+    if operator is not None:
+        # Tolerate a pasted path with surrounding whitespace or quotes
+        # (Windows "Copy as path" wraps the path in double quotes).
+        tex_dir = clean_texture_dir(getattr(operator, "texture_dir", "") or "")
+        if tex_dir:
+            tex_dir = os.path.abspath(bpy.path.abspath(tex_dir))
+            if os.path.isdir(tex_dir):
+                search_dirs.append(tex_dir)
+            else:
+                log.warning("Texture Folder does not exist: %s", tex_dir)
+    if model_dir not in search_dirs:
+        search_dirs.append(model_dir)
+
+    # name -> True if a matching image file was found on disk
+    tex_report = {}
+
+    log.info("Texture search directories: %s", search_dirs)
+    log.info("Model v%d: %d textures %s, %d submodels",
+             model.version, len(model.textures), model.textures, len(model.submodels))
+    print(f"[Descent3] v{model.version}: {len(model.textures)} textures, "
+          f"{len(model.submodels)} submodels; texture search: {search_dirs}")
+
     # Create a collection for this model
     model_name = os.path.splitext(os.path.basename(filepath))[0]
     collection = bpy.data.collections.new(model_name)
     context.scene.collection.children.link(collection)
 
-    # Import each submodel
-    obj_list = []
+    # Import each submodel, keyed by its own index so hierarchy and parenting
+    # lookups stay correct even if submodel indices are sparse or out of order.
+    # material_cache lets submodels that share a texture reuse one material.
+    material_cache = {}  # texture name -> bpy.types.Material
+    obj_by_index = {}
     for sm in model.submodels:
-        obj = _import_submodel(context, model, sm, collection)
+        log.info("Importing submodel %d: '%s' (verts=%d, faces=%d, parent=%d)",
+                 sm.index, sm.name, len(sm.vertices), len(sm.faces), sm.parent)
+        obj = _import_submodel(
+            context, model, sm, collection, search_dirs, tex_report, material_cache
+        )
         if obj:
-            obj_list.append(obj)
+            obj_by_index[sm.index] = obj
 
     # Set up parent-child relationships
+    log.info("Setting up parent-child hierarchy")
     for sm in model.submodels:
-        if sm.index < len(obj_list) and obj_list[sm.index] is not None:
-            if 0 <= sm.parent < len(obj_list) and obj_list[sm.parent] is not None:
-                obj_list[sm.index].parent = obj_list[sm.parent]
-                obj_list[sm.index].matrix_parent_inverse = (
-                    obj_list[sm.parent].matrix_world.inverted()
-                )
+        child = obj_by_index.get(sm.index)
+        parent = obj_by_index.get(sm.parent)  # sm.parent == -1 (root) -> None
+        if child is not None and parent is not None:
+            child.parent = parent
+            child.matrix_parent_inverse = parent.matrix_world.inverted()
+            log.info("  '%s' -> parent index %d", sm.name, sm.parent)
 
     # Import gun points
     if operator and operator.import_guns:
+        log.info("Importing %d gun points", len(model.gun_banks))
         for i, bank in enumerate(model.gun_banks):
             empty = bpy.data.objects.new(f"Gun_{i}", None)
             empty.empty_display_type = "SINGLE_ARROW"
@@ -141,35 +197,102 @@ def import_pof(context, filepath: str, operator=None):
             empty.location = Vector((bank.point.x, bank.point.y, bank.point.z))
             collection.objects.link(empty)
             # Parent to the gun's parent submodel
-            if 0 <= bank.parent < len(obj_list) and obj_list[bank.parent] is not None:
-                empty.parent = obj_list[bank.parent]
+            gun_parent = obj_by_index.get(bank.parent)
+            if gun_parent is not None:
+                empty.parent = gun_parent
 
     # Import attach points
     if operator and operator.import_attach:
+        log.info("Importing %d attach points", len(model.attach_points))
         for i, ap in enumerate(model.attach_points):
             empty = bpy.data.objects.new(f"Attach_{i}", None)
             empty.empty_display_type = "PLAIN_AXES"
             empty.empty_display_size = 0.2
             empty.location = Vector((ap.point.x, ap.point.y, ap.point.z))
             collection.objects.link(empty)
-            if 0 <= ap.parent < len(obj_list) and obj_list[ap.parent] is not None:
-                empty.parent = obj_list[ap.parent]
+            ap_parent = obj_by_index.get(ap.parent)
+            if ap_parent is not None:
+                empty.parent = ap_parent
 
-    # Select all imported objects
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in obj_list:
-        if obj:
-            obj.select_set(True)
-    if obj_list and obj_list[0]:
-        context.view_layer.objects.active = obj_list[0]
+    # Select all imported objects, making the root submodel active.
+    for obj in context.view_layer.objects:
+        obj.select_set(False)
+    imported_objs = list(obj_by_index.values())
+    for obj in imported_objs:
+        obj.select_set(True)
+    root = obj_by_index.get(0)
+    if root is None and imported_objs:
+        root = imported_objs[0]
+    if root is not None:
+        context.view_layer.objects.active = root
+
+    # Summarize texture resolution so missing images are visible to the user
+    # instead of silently producing blank materials.
+    missing = sorted(name for name, found in tex_report.items() if not found)
+    found_count = sum(1 for found in tex_report.values() if found)
+    total_count = len(tex_report)
+    if total_count:
+        summary = f"textures {found_count}/{total_count} found"
+        if missing:
+            shown = ", ".join(missing[:8]) + (" ..." if len(missing) > 8 else "")
+            summary += f" (missing: {shown})"
+        log.info(summary)
+        print(f"[Descent3] {summary}")
 
     if operator:
-        operator.report({"INFO"}, f"Imported {model_name}: {len(model.submodels)} submodels")
+        msg = f"Imported {model_name}: {len(model.submodels)} submodels"
+        if total_count:
+            msg += f", {found_count}/{total_count} textures"
+        if missing:
+            operator.report(
+                {"WARNING"},
+                msg + f" — missing textures: {', '.join(missing[:8])}"
+                + (" ..." if len(missing) > 8 else ""),
+            )
+        else:
+            operator.report({"INFO"}, msg)
 
     return {"FINISHED"}
 
 
-def _import_submodel(context, model: POFModel, sm: Submodel, collection) -> bpy.types.Object | None:
+def _get_or_create_material(name, search_dirs, tex_report, material_cache):
+    """Return a material for a texture name, creating it (and loading its image)
+    once and caching it so submodels sharing a texture reuse the same material.
+    """
+    cached = material_cache.get(name)
+    if cached is not None:
+        return cached
+
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf is None:
+        bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+
+    image_path = find_texture_image(name, search_dirs)
+    # Record resolution status (first success sticks) for the import summary.
+    tex_report[name] = tex_report.get(name, False) or bool(image_path)
+    if image_path:
+        try:
+            img = bpy.data.images.load(image_path, check_existing=True)
+            log.info("Loaded image '%s' (%dx%d) for material '%s'",
+                     img.name, img.size[0], img.size[1], name)
+            tex_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+            tex_node.image = img
+            tex_node.location = (-400, 300)
+            mat.node_tree.links.new(
+                tex_node.outputs["Color"], bsdf.inputs["Base Color"]
+            )
+        except Exception as e:
+            log.error("Failed to load image '%s': %s", image_path, e)
+    else:
+        log.info("No image found for texture '%s'; using blank material", name)
+
+    material_cache[name] = mat
+    return mat
+
+
+def _import_submodel(context, model: POFModel, sm: Submodel, collection, search_dirs, tex_report, material_cache) -> bpy.types.Object | None:
     """Import a single submodel as a Blender mesh object."""
     if not sm.vertices:
         # Create an empty for submodels with no geometry
@@ -184,24 +307,21 @@ def _import_submodel(context, model: POFModel, sm: Submodel, collection) -> bpy.
     # Vertices
     verts = [Vector((v.position.x, v.position.y, v.position.z)) for v in sm.vertices]
 
-    # Faces (list of vertex index tuples)
-    face_indices = []
-    for face in sm.faces:
-        if len(face.vertices) >= 3:
-            face_indices.append(tuple(fv.index for fv in face.vertices))
+    # Only faces with 3+ vertices become Blender polygons. Keep this filtered
+    # list so UVs and material indices stay aligned with mesh.polygons even when
+    # some source faces are dropped.
+    kept_faces = [f for f in sm.faces if len(f.vertices) >= 3]
+    face_indices = [tuple(fv.index for fv in f.vertices) for f in kept_faces]
 
     # Build mesh
     mesh.from_pydata(verts, [], face_indices)
     mesh.update()
 
-    # Set UVs
-    if any(sm.faces):
+    # Set UVs (mesh.polygons is 1:1 with kept_faces, in order)
+    if kept_faces:
         uv_layer = mesh.uv_layers.new(name="UVMap")
-        for face_idx, pof_face in enumerate(sm.faces):
-            if face_idx >= len(mesh.polygons):
-                break
-            blender_face = mesh.polygons[face_idx]
-            for loop_idx, fv in zip(blender_face.loop_indices, pof_face.vertices):
+        for poly, pof_face in zip(mesh.polygons, kept_faces):
+            for loop_idx, fv in zip(poly.loop_indices, pof_face.vertices):
                 if loop_idx < len(uv_layer.data):
                     uv_layer.data[loop_idx].uv = (fv.u, fv.v)
 
@@ -220,16 +340,31 @@ def _import_submodel(context, model: POFModel, sm: Submodel, collection) -> bpy.
     obj.location = Vector((sm.offset.x, sm.offset.y, sm.offset.z))
     collection.objects.link(obj)
 
-    # Set materials from face texture references
-    tex_set = set()
-    for face in sm.faces:
-        if face.textured and 0 <= face.texnum < len(model.textures):
-            tex_set.add(face.texnum)
-
+    # Build/reuse one material per texture used by this submodel's faces.
+    tex_set = {
+        f.texnum for f in kept_faces
+        if f.textured and 0 <= f.texnum < len(model.textures)
+    }
+    mat_slots = {}      # texnum -> material slot index on this object
+    name_to_slot = {}   # texture name -> slot index (dedupe within this object)
     for tex_idx in sorted(tex_set):
         tex_name = model.textures[tex_idx]
-        mat = bpy.data.materials.new(name=tex_name)
-        obj.data.materials.append(mat)
+        if tex_name not in name_to_slot:
+            mat = _get_or_create_material(
+                tex_name, search_dirs, tex_report, material_cache
+            )
+            obj.data.materials.append(mat)
+            name_to_slot[tex_name] = len(obj.data.materials) - 1
+        mat_slots[tex_idx] = name_to_slot[tex_name]
+
+    # Assign material indices to faces (aligned with kept_faces / mesh.polygons).
+    assigned = 0
+    for poly, pof_face in zip(mesh.polygons, kept_faces):
+        if pof_face.textured and pof_face.texnum in mat_slots:
+            poly.material_index = mat_slots[pof_face.texnum]
+            assigned += 1
+    if kept_faces:
+        log.info("  Assigned material to %d/%d faces", assigned, len(kept_faces))
 
     # Store POF-specific properties as custom properties
     obj["pof_index"] = sm.index
@@ -529,6 +664,7 @@ classes = (
 
 
 def register():
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)

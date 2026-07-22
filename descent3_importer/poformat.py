@@ -266,7 +266,8 @@ class POFReader:
         if length < 0 or length > 10000:
             raise ValueError(f"Invalid string length: {length}")
         data = self.read_bytes(length)
-        return data.decode("ascii", errors="replace")
+        s = data.decode("ascii", errors="replace")
+        return s.rstrip("\x00")
 
     def read_color_rgb(self) -> Color:
         r = self.read_uint8()
@@ -321,7 +322,7 @@ class POFWriter:
         self.stream.write(struct.pack("<fff", v.x, v.y, v.z))
 
     def write_string(self, s: str):
-        encoded = s.encode("ascii")
+        encoded = s.encode("ascii") + b"\x00"
         self.write_int32(len(encoded))
         self.write_bytes(encoded)
 

@@ -1,5 +1,4 @@
 /data
 /.idea
-*.pyc
-*.pyc
+__pycache__/
 *.pyc
