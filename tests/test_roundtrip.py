@@ -519,6 +519,39 @@ class TestAnimationRoundtrip:
         assert [kf.angle for kf in result.submodels[0].keyframes] == [0, 1, 2]
         assert result.submodels[1].keyframes[0].angle == 1000
 
+    def test_position_keyframes(self):
+        model = POFModel(version=2300, major_version=23)
+        sm = Submodel(index=0, parent=-1, name="lift")
+        sm.num_key_pos = 2
+        sm.keyframes = [
+            Keyframe(position=Vector3(0.0, 0.0, 0.0), pos_start_time=0),
+            Keyframe(position=Vector3(0.0, 0.0, 2.5), pos_start_time=10),
+        ]
+        model.submodels = [sm]
+        result = roundtrip(model)
+        got = result.submodels[0]
+        assert got.num_key_pos == 2
+        assert got.keyframes[0].position.as_tuple() == approx_vec(Vector3(0, 0, 0))
+        assert got.keyframes[1].position.as_tuple() == approx_vec(Vector3(0, 0, 2.5))
+
+    def test_more_position_keys_than_rotation_keys(self):
+        """PANI must read num_key_pos entries, not however many keys ANIM made."""
+        model = POFModel(version=2300, major_version=23)
+        sm = Submodel(index=0, parent=-1, name="lift")
+        sm.num_key_angles = 1
+        sm.num_key_pos = 3
+        sm.keyframes = [
+            Keyframe(axis=Vector3(0, 0, 1), angle=42, position=Vector3(0, 0, 0)),
+            Keyframe(position=Vector3(0, 0, 1.0)),
+            Keyframe(position=Vector3(0, 0, 2.0)),
+        ]
+        model.submodels = [sm]
+        got = roundtrip(model).submodels[0]
+        assert len(got.keyframes) >= 3
+        assert [kf.position.z for kf in got.keyframes[:3]] == pytest.approx(
+            [0.0, 1.0, 2.0], **TOL
+        )
+
     def test_no_animation_writes_no_chunk(self):
         model = POFModel(version=2300, major_version=23)
         model.submodels = [Submodel(index=0, parent=-1, name="hull")]
