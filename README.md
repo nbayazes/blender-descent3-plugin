@@ -25,7 +25,38 @@ keyframes.
 > load the package — the import/export operators never register and Blender warns
 > that `poformat.py` is "missing `bl_info`".
 
-**To install:**
+### Option 1 — install script (recommended)
+
+`install.ps1` (Windows) and `install.sh` (Linux/macOS) find every Blender on the
+machine — Steam, standalone installers, portable builds, Flatpak, Snap, macOS app
+bundles — work out each one's version, and copy the package folder into that
+version's user add-ons directory. Run from the repo root:
+
+```powershell
+.\install.ps1 -List        # show every Blender found and where it would install
+.\install.ps1              # install into the newest version
+.\install.ps1 -All         # install into every version found
+.\install.ps1 -Version 4.2 # install into one specific version
+.\install.ps1 -DryRun      # print what would happen, change nothing
+.\install.ps1 -Clean       # wipe the destination folder first
+```
+
+```bash
+./install.sh --list        # same flags, long-form: --all --version 4.2 --dry-run --clean
+./install.sh
+```
+
+If Blender lives somewhere unusual, skip detection with
+`-Target` / `--target` and pass either a version root
+(`…/Blender/5.2`) or an add-ons directory directly.
+
+Steam and standalone Blender share the same user config directory, so a given
+version only needs installing once no matter where the executable lives.
+
+The scripts always copy the whole package folder, clear stale `__pycache__`, and
+warn about the loose-file mistake described above.
+
+### Option 2 — install by hand
 
 1. Zip the `descent3_importer/` folder (so the zip contains the folder, not just
    its files).
@@ -33,8 +64,10 @@ keyframes.
    zip, then enable **"Import-Export: Descent 3 POF/OOF Importer/Exporter"**.
 
 Alternatively, copy the `descent3_importer/` folder straight into your Blender
-`scripts/addons/` directory and enable it in Preferences. After updating the
-files, **restart Blender** (or toggle the add-on off/on) so the new code loads.
+`scripts/addons/` directory and enable it in Preferences.
+
+Either way, after updating the files **restart Blender** (or toggle the add-on
+off/on) so the new code loads.
 
 ## Importing
 
