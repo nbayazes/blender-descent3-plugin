@@ -874,7 +874,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
                 anim_w.write_int32(sm.num_key_angles)
                 anim_w.write_int32(sm.rot_track_min)
                 anim_w.write_int32(sm.rot_track_max)
-                keys = sm.keyframes[:sm.num_key_angles]
+                keys = _padded_keyframes(sm.keyframes, sm.num_key_angles)
             else:
                 keys = _padded_keyframes(sm.keyframes, max_keys)
             for kf in keys:
@@ -898,7 +898,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
                 pani_w.write_int32(sm.num_key_pos)
                 pani_w.write_int32(sm.pos_track_min)
                 pani_w.write_int32(sm.pos_track_max)
-                keys = sm.keyframes[:sm.num_key_pos]
+                keys = _padded_keyframes(sm.keyframes, sm.num_key_pos)
             else:
                 keys = _padded_keyframes(sm.keyframes, max_keys)
             for kf in keys:

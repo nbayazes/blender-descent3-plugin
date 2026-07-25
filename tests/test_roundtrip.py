@@ -552,6 +552,20 @@ class TestAnimationRoundtrip:
             [0.0, 1.0, 2.0], **TOL
         )
 
+    def test_declared_key_count_matches_what_is_written(self):
+        """num_key_angles is the count the reader trusts. If a submodel claims
+        more keys than its list holds, the writer must still emit that many or
+        the reader runs past the end of the chunk.
+        """
+        model = POFModel(version=2300, major_version=23)
+        sm = Submodel(index=0, parent=-1, name="turret")
+        sm.num_key_angles = 4          # claims four...
+        sm.keyframes = [Keyframe(axis=Vector3(0, 0, 1), angle=7)]  # ...holds one
+        model.submodels = [sm]
+        got = roundtrip(model).submodels[0]
+        assert len(got.keyframes) == 4
+        assert got.keyframes[0].angle == 7
+
     def test_no_animation_writes_no_chunk(self):
         model = POFModel(version=2300, major_version=23)
         model.submodels = [Submodel(index=0, parent=-1, name="hull")]
