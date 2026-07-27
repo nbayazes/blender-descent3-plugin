@@ -55,7 +55,7 @@ def find_texture_image(texture_name: str, search_dirs) -> str | None:
                     path = os.path.join(directory, fn)
                     log.info("Found texture (case-insensitive): %s", path)
                     return path
-        except OSError:
-            pass
+        except OSError as e:
+            log.warning("Could not list texture directory %s: %s", directory, e)
     log.warning("Texture not found: %s (searched %s)", texture_name, search_dirs)
     return None

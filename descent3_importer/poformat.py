@@ -12,10 +12,12 @@ File format:
 from __future__ import annotations
 
 import io
+import logging
 import struct
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import BinaryIO
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -219,12 +221,19 @@ class POFModel:
     attach_points: list[AttachPoint] = field(default_factory=list)
 
     def build_hierarchy(self):
-        """Build children lists from parent indices."""
+        """Build children lists from parent indices.
+
+        ``children`` holds submodel *indices* (``sm.index``), not positions in
+        ``self.submodels``. SOBJ chunks can arrive out of order or with gaps, so
+        the two are not interchangeable, and callers look parents up by index.
+        """
+        by_index = {sm.index: sm for sm in self.submodels}
         for sm in self.submodels:
             sm.children = []
-        for i, sm in enumerate(self.submodels):
-            if 0 <= sm.parent < len(self.submodels):
-                self.submodels[sm.parent].children.append(i)
+        for sm in self.submodels:
+            parent = by_index.get(sm.parent)  # sm.parent == -1 (root) -> None
+            if parent is not None:
+                parent.children.append(sm.index)
 
 # ---------------------------------------------------------------------------
 # Binary Reader
@@ -322,7 +331,22 @@ class POFWriter:
         self.stream.write(struct.pack("<fff", v.x, v.y, v.z))
 
     def write_string(self, s: str):
-        encoded = s.encode("ascii") + b"\x00"
+        """Write a length-prefixed, NUL-terminated string.
+
+        The format is 8-bit ASCII but Blender object and material names are
+        UTF-8, so unrepresentable characters are substituted rather than
+        raising: losing an accent beats failing the whole export. The reader
+        decodes with the same tolerance.
+        """
+        try:
+            raw = s.encode("ascii")
+        except UnicodeEncodeError:
+            raw = s.encode("ascii", errors="replace")
+            log.warning(
+                "Non-ASCII characters in %r are not representable in POF; "
+                "wrote %r instead", s, raw.decode("ascii")
+            )
+        encoded = raw + b"\x00"
         self.write_int32(len(encoded))
         self.write_bytes(encoded)
 
@@ -443,7 +467,9 @@ def _parse_submodel_flags(sm: Submodel):
             if 0 < spin_rate <= 20:
                 sm.flags |= SOF_ROTATE
         except ValueError:
-            pass
+            log.warning(
+                "Submodel '%s': $rotate= expects a number, got %r", sm.name, data
+            )
     elif command == "$jitter":
         sm.flags |= SOF_JITTER
     elif command == "$shell":
@@ -627,7 +653,13 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 else:
                     sm.num_key_pos = nframes
 
-                for kf in sm.keyframes:
+                # Read exactly num_key_pos entries. A submodel can carry more
+                # position keys than rotation keys, so the existing keyframe
+                # list (built from ANIM) is extended rather than iterated.
+                for k in range(sm.num_key_pos):
+                    while len(sm.keyframes) <= k:
+                        sm.keyframes.append(Keyframe())
+                    kf = sm.keyframes[k]
                     if timed:
                         kf.pos_start_time = reader.read_int32()
                     kf.position = reader.read_vector3()
@@ -658,9 +690,17 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 for i in range(n_normals):
                     model.attach_points[i].has_uvec = True
                     reader.read_int32()  # index
+                    # Layout is index, normal, uvec -- the normal repeats what
+                    # ATCH already gave us and is discarded (polymodel.cpp,
+                    # ID_ATTACH_NORMALS). Reading these two the other way round
+                    # silently rotates anything attached to the model.
+                    reader.read_vector3()  # normal (already read from ATCH)
                     model.attach_points[i].uvec = reader.read_vector3()
-                    # Also read the normal again (overwrite or skip)
-                    _ = reader.read_vector3()
+            else:
+                log.warning(
+                    "Ignoring ATTACH normals: %d attach points but %d normals",
+                    len(model.attach_points), n_normals,
+                )
 
         else:
             # Unknown chunk, skip to end
@@ -669,13 +709,33 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         # Ensure we're at the end of this chunk
         reader.seek(chunk_end)
 
-    # Build hierarchy
+    # Drop the placeholders left where a SOBJ index was never filled in. This
+    # has to happen before build_hierarchy, which cannot walk a list of Nones.
+    missing = [i for i, sm in enumerate(model.submodels) if sm is None]
+    if missing:
+        log.warning(
+            "Model declares submodel indices with no SOBJ chunk: %s", missing
+        )
+        model.submodels = [sm for sm in model.submodels if sm is not None]
+
     model.build_hierarchy()
 
-    # Remove None entries from submodels
-    model.submodels = [sm for sm in model.submodels if sm is not None]
-
     return model
+
+
+def _padded_keyframes(keyframes: list[Keyframe], count: int) -> list[Keyframe]:
+    """Return exactly ``count`` keyframes, padding a short track if needed.
+
+    Pre-v22 files store one global key count that applies to every submodel
+    (``ID_ANIM`` in polymodel.cpp), so a submodel with a shorter track has to be
+    padded out or the reader runs off the end of the chunk. Repeating the last
+    key holds the final pose; an empty track pads with a neutral key.
+    """
+    keys = list(keyframes[:count])
+    if len(keys) < count:
+        filler = keys[-1] if keys else Keyframe(axis=Vector3(0.0, 0.0, 1.0))
+        keys.extend([filler] * (count - len(keys)))
+    return keys
 
 
 def write_pof(model: POFModel) -> bytes:
@@ -805,16 +865,19 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
     if has_anim:
         anim_buf = io.BytesIO()
         anim_w = POFWriter(anim_buf)
+        max_keys = max((sm.num_key_angles for sm in model.submodels), default=0)
         if not timed:
-            # Use max key angles across all submodels
-            max_keys = max((sm.num_key_angles for sm in model.submodels), default=0)
+            # One count for the whole model: every submodel must emit max_keys.
             anim_w.write_int32(max_keys)
         for sm in model.submodels:
             if timed:
                 anim_w.write_int32(sm.num_key_angles)
                 anim_w.write_int32(sm.rot_track_min)
                 anim_w.write_int32(sm.rot_track_max)
-            for kf in sm.keyframes[:sm.num_key_angles]:
+                keys = _padded_keyframes(sm.keyframes, sm.num_key_angles)
+            else:
+                keys = _padded_keyframes(sm.keyframes, max_keys)
+            for kf in keys:
                 if timed:
                     anim_w.write_int32(kf.rot_start_time)
                 anim_w.write_vector3(kf.axis)
@@ -827,15 +890,18 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
     if has_pos_anim:
         pani_buf = io.BytesIO()
         pani_w = POFWriter(pani_buf)
+        max_keys = max((sm.num_key_pos for sm in model.submodels), default=0)
         if not timed:
-            max_keys = max((sm.num_key_pos for sm in model.submodels), default=0)
             pani_w.write_int32(max_keys)
         for sm in model.submodels:
             if timed:
                 pani_w.write_int32(sm.num_key_pos)
                 pani_w.write_int32(sm.pos_track_min)
                 pani_w.write_int32(sm.pos_track_max)
-            for kf in sm.keyframes[:sm.num_key_pos]:
+                keys = _padded_keyframes(sm.keyframes, sm.num_key_pos)
+            else:
+                keys = _padded_keyframes(sm.keyframes, max_keys)
+            for kf in keys:
                 if timed:
                     pani_w.write_int32(kf.pos_start_time)
                 pani_w.write_vector3(kf.position)

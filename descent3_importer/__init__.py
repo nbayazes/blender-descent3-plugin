@@ -332,8 +332,13 @@ def _import_submodel(context, model: POFModel, sm: Submodel, collection, search_
         ]
         try:
             mesh.normals_split_custom_set_from_vertices(custom_normals)
-        except Exception:
-            pass  # Fallback: let Blender compute normals
+        except Exception as e:
+            # Fallback: let Blender compute normals. Worth saying out loud —
+            # silently recomputed normals look like a shading bug later.
+            log.warning(
+                "Submodel '%s': could not apply custom normals (%s); "
+                "using Blender's computed normals", sm.name, e
+            )
 
     # Create object
     obj = bpy.data.objects.new(sm.name or f"Submodel_{sm.index}", mesh)
@@ -575,7 +580,10 @@ def _build_pof_model(context, objects: list, operator=None) -> POFModel:
                 if uv_layer:
                     uv = uv_layer.data[loop_idx].uv
                     fv.u = uv.x
-                    fv.v = uv.y
+                    # Descent 3 puts the UV origin at the top-left, Blender at
+                    # the bottom-left. Import negates V, so export must negate
+                    # it back or every exported texture comes out mirrored.
+                    fv.v = -uv.y
                 else:
                     fv.u = 0.0
                     fv.v = 0.0
