@@ -7,12 +7,12 @@ Run with: python -m pytest tests/test_texutil.py -v
 """
 
 import os
-import sys
 
-# Add the addon directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from texutil import clean_texture_dir, find_texture_image, IMAGE_EXTENSIONS
+from descent3_importer.texutil import (
+    IMAGE_EXTENSIONS,
+    clean_texture_dir,
+    find_texture_image,
+)
 
 
 class TestCleanTextureDir:

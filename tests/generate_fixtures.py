@@ -16,9 +16,10 @@ import struct
 import sys
 import zlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
+# Run as a script, so the repo root is not on sys.path automatically.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from poformat import (  # noqa: E402
+from descent3_importer.poformat import (  # noqa: E402
     POFModel,
     Submodel,
     SubmodelVertex,

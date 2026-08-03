@@ -1,12 +1,17 @@
-"""
-Descent 3 POF/OOF Binary Format Parser & Writer
+"""Descent 3 POF/OOF binary format parser and writer.
 
-Parses and writes Descent 3 polygon model files (POF/OOF format).
-Based on the Descent 3 source code and Inferno engine reference implementation.
+Parses and writes Descent 3 polygon model files. Based on the Descent 3 source
+code and Inferno engine reference implementation, which are vendored at the
+repository root as ``polymodel.cpp``, ``polymodel.h`` and
+``polymodel_external.h``; comments here cite them by symbol name.
 
-File format:
-  Header: char[4] magic ("PSPO") + int32 version (major*100+minor)
-  Chunks: char[4] id + int32 length + byte[] data
+File format::
+
+    Header: char[4] magic ("PSPO") + int32 version (major*100+minor)
+    Chunks: char[4] id + int32 length + byte[] data
+
+This module has no ``bpy`` dependency, so it can be exercised by the pytest
+suite outside Blender.
 """
 
 from __future__ import annotations
@@ -24,12 +29,59 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 POF_MAGIC = b"PSPO"
+
+#: Oldest file version this parser accepts. Engine: ``PM_COMPATIBLE_VERSION``
+#: (polymodel.h:305).
 MIN_OBJFILE_VERSION = 1807
+
+#: Version written for new files. Engine: ``PM_OBJFILE_VERSION``
+#: (polymodel.h:306).
 OBJFILE_VERSION = 2300
+
+# ---------------------------------------------------------------------------
+# Version gates
+# ---------------------------------------------------------------------------
+# A POF version is ``major * 100 + minor``. Several record layouts changed over
+# the format's life, and both the reader and the writer have to branch on the
+# same thresholds or the two disagree about how many bytes a record occupies.
+
+#: Divisor of the ``major * 100 + minor`` encoding.
+VERSION_MAJOR_SCALE = 100
+
+#: A header value below this is a bare major version from a pre-release tool
+#: and is scaled up by :data:`VERSION_MAJOR_SCALE` before use.
+MAX_UNSCALED_VERSION = 18
+
+#: Above this version each SOBJ record carries a ``geometric_center`` vector.
+VERSION_GEOMETRIC_CENTER = 1805
+
+#: At or above this version each GPNT gun bank is prefixed by its parent
+#: submodel index.
+VERSION_GUNPOINT_PARENT = 1908
+
+#: Major version at which every face is followed by two lightmap UV-diff
+#: floats.
+MAJOR_VERSION_LIGHTMAP = 21
+
+#: Major version at which animation becomes *timed*: ANIM/PANI store a
+#: per-submodel key count and start times instead of one global frame count.
+MAJOR_VERSION_TIMED_ANIM = 22
+
+#: Major version at which a per-vertex alpha float array follows the vertex
+#: normals.
+MAJOR_VERSION_VERTEX_ALPHA = 23
 
 # Chunk IDs (four-character codes as 32-bit ints, little-endian)
 def _fcc(s: str) -> int:
-    """Convert a 4-char code to its little-endian 32-bit integer."""
+    """Convert a four-character code to its little-endian 32-bit integer.
+
+    Args:
+        s: Exactly four ASCII characters, e.g. ``"SOBJ"``.
+
+    Returns:
+        The code reinterpreted as an unsigned 32-bit little-endian integer,
+        which is how chunk IDs appear in the byte stream.
+    """
     return struct.unpack("<I", s.encode("ascii"))[0]
 
 CHUNK_OHDR = _fcc("OHDR")
@@ -78,39 +130,175 @@ PMF_NOT_RESIDENT  = 16
 PMF_SIZE_COMPUTED = 32
 
 # ---------------------------------------------------------------------------
+# Field sentinels and limits
+# ---------------------------------------------------------------------------
+
+#: ``Submodel.parent`` value meaning "this is a root submodel".
+NO_PARENT = -1
+
+#: ``Submodel.movement_type`` value meaning the subobject does not move
+#: (polymodel_external.h:157).
+MOVEMENT_TYPE_NONE = -1
+
+#: ``ModelFace.texnum`` value for an untextured face, which carries an RGB
+#: triple instead of a texture index.
+TEXNUM_NONE = -1
+
+#: Index of the root submodel, which is also detail level 0.
+ROOT_SUBMODEL_INDEX = 0
+
+#: Fully opaque vertex alpha.
+ALPHA_OPAQUE = 1.0
+
+#: A vertex alpha below this marks the whole model :data:`PMF_ALPHA`. Exact
+#: equality against 1.0 would flag models whose alpha survived a float round
+#: trip a hair under opaque.
+ALPHA_OPAQUE_THRESHOLD = 0.99
+
+#: Untextured face colors are stored as three unsigned bytes and exposed as
+#: 0..1 floats.
+COLOR_CHANNEL_MAX = 255
+
+#: Upper bound on a length-prefixed string before it is read. A corrupt or
+#: misaligned length would otherwise drive an enormous allocation.
+MAX_STRING_LENGTH = 10000
+
+#: Largest ``$rotate=`` spin rate accepted. Values outside ``0 < rate <= 20``
+#: leave :data:`SOF_ROTATE` unset, matching the engine's own range check.
+MAX_SPIN_RATE = 20
+
+#: A property string shorter than this cannot hold a command (``$`` plus at
+#: least two letters).
+MIN_PROPS_LENGTH = 3
+
+#: Gunpoints kept per weapon battery; the engine's array is this wide, so extra
+#: indices are read to stay aligned with the stream and then discarded.
+MAX_WB_GUNPOINTS = 8
+
+#: Turrets kept per weapon battery -- a separate engine array of the same size.
+MAX_WB_TURRETS = 8
+
+#: Magnitude below which a vector is treated as degenerate and normalizes to
+#: zero rather than dividing by something near zero.
+NORMALIZE_EPSILON = 1e-10
+
+#: Axis of the neutral key used to pad an empty animation track. Kept as a
+#: plain tuple so each *call* builds its own :class:`Vector3`; a module-level
+#: ``Vector3`` would be shared by every model padded in the session, where a
+#: single mutation would corrupt all of them. Within one call the padding keys
+#: still alias one another, exactly as before this was named. The value is
+#: arbitrary -- the key it belongs to has a zero angle, so any unit axis
+#: produces the same pose.
+DEFAULT_KEYFRAME_AXIS = (0.0, 0.0, 1.0)
+
+# ---------------------------------------------------------------------------
+# Submodel property commands
+# ---------------------------------------------------------------------------
+
+#: ``$rotate=`` carries a spin rate that has to pass a range check before
+#: :data:`SOF_ROTATE` is set, so it is handled separately from the table below.
+PROP_ROTATE = "$rotate="
+
+#: Property command -> ``SOF_*`` flag it sets, for every command whose flag
+#: depends only on the command being present. Keys are matched against the
+#: lower-cased command by equality. Commands that take a payload keep their
+#: trailing ``=`` because the command is split at the first ``=``; the payload
+#: itself is only consumed for ``$rotate=``, since nothing here needs the
+#: glow/thruster colors or the turret field of view.
+#:
+#: The engine's own chain (``SetPolymodelProperties``, polymodel.cpp:1003-1228)
+#: is mostly ``stricmp``, but uses bounded ``strnicmp`` prefix matches for
+#: ``$jitter`` (:1048), ``$shell`` (:1055), ``$facing`` (:1062) and
+#: ``$frontface`` (:1068), so it would also accept e.g. ``$shellfoo``. This
+#: table deliberately preserves the add-on's existing exact-match behaviour
+#: rather than adopting the engine's; changing it is a behaviour change, not a
+#: refactor.
+PROPERTY_COMMAND_FLAGS = {
+    "$jitter": SOF_JITTER,
+    "$shell": SOF_SHELL,
+    "$facing": SOF_FACING,
+    "$frontface": SOF_FRONTFACE,
+    "$glow=": SOF_GLOW,
+    "$thruster=": SOF_THRUSTER,
+    "$fov=": SOF_TURRET,
+    "$monitor01": SOF_MONITOR1,
+    "$monitor02": SOF_MONITOR2,
+    "$monitor03": SOF_MONITOR3,
+    "$monitor04": SOF_MONITOR4,
+    "$monitor05": SOF_MONITOR5,
+    "$monitor06": SOF_MONITOR6,
+    "$monitor07": SOF_MONITOR7,
+    "$monitor08": SOF_MONITOR8,
+    "$viewer": SOF_VIEWER,
+    "$layer": SOF_LAYER,
+    "$custom": SOF_CUSTOM,
+}
+
+# ---------------------------------------------------------------------------
 # Data Classes
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Vector3:
+    """A three-component vector, matching the engine's ``vector`` type.
+
+    Deliberately not ``mathutils.Vector``: this module has to stay importable
+    outside Blender so the parser can be unit-tested.
+
+    Attributes:
+        x: First component.
+        y: Second component.
+        z: Third component.
+    """
+
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
 
     def as_tuple(self) -> tuple[float, float, float]:
+        """Return the components as a plain ``(x, y, z)`` tuple."""
         return (self.x, self.y, self.z)
 
-    def __add__(self, other: "Vector3") -> "Vector3":
+    def __add__(self, other: Vector3) -> Vector3:
+        """Return the component-wise sum of this vector and ``other``."""
         return Vector3(self.x + other.x, self.y + other.y, self.z + other.z)
 
-    def __sub__(self, other: "Vector3") -> "Vector3":
+    def __sub__(self, other: Vector3) -> Vector3:
+        """Return the component-wise difference of this vector and ``other``."""
         return Vector3(self.x - other.x, self.y - other.y, self.z - other.z)
 
-    def __mul__(self, s: float) -> "Vector3":
+    def __mul__(self, s: float) -> Vector3:
+        """Return this vector scaled by ``s``."""
         return Vector3(self.x * s, self.y * s, self.z * s)
 
     def magnitude(self) -> float:
+        """Return the Euclidean length of this vector."""
         return (self.x**2 + self.y**2 + self.z**2) ** 0.5
 
-    def normalized(self) -> "Vector3":
+    def normalized(self) -> Vector3:
+        """Return a unit-length copy of this vector.
+
+        Returns:
+            A vector of length 1 in the same direction, or a zero vector if this
+            one is shorter than :data:`NORMALIZE_EPSILON`. Degenerate input is
+            common in real models, so it yields zero rather than raising.
+        """
         m = self.magnitude()
-        if m < 1e-10:
+        if m < NORMALIZE_EPSILON:
             return Vector3(0, 0, 0)
         return Vector3(self.x / m, self.y / m, self.z / m)
 
 
 @dataclass
 class Color:
+    """An RGB color with components in the 0..1 range.
+
+    Attributes:
+        r: Red component.
+        g: Green component.
+        b: Blue component.
+    """
+
     r: float = 1.0
     g: float = 1.0
     b: float = 1.0
@@ -118,6 +306,17 @@ class Color:
 
 @dataclass
 class FaceVertex:
+    """One corner of a face: a vertex reference plus that corner's UV.
+
+    UVs live per face-corner rather than per vertex, so a vertex shared by
+    several faces can carry a different UV in each.
+
+    Attributes:
+        index: Index into the owning submodel's vertex list.
+        u: Horizontal texture coordinate.
+        v: Vertical texture coordinate, with the origin at the top-left.
+    """
+
     index: int = 0
     u: float = 0.0
     v: float = 0.0
@@ -125,22 +324,55 @@ class FaceVertex:
 
 @dataclass
 class ModelFace:
+    """A single polygon.
+
+    Attributes:
+        normal: Face normal as stored in the file.
+        vertices: Corners in winding order.
+        textured: Whether the face uses ``texnum``; if false it uses ``color``.
+        texnum: Index into :attr:`POFModel.textures`, or :data:`TEXNUM_NONE`.
+        color: Flat color used when ``textured`` is false.
+    """
+
     normal: Vector3 = field(default_factory=Vector3)
     vertices: list[FaceVertex] = field(default_factory=list)
     textured: bool = True
-    texnum: int = -1
+    texnum: int = TEXNUM_NONE
     color: Color = field(default_factory=Color)
 
 
 @dataclass
 class SubmodelVertex:
+    """A vertex with its normal and opacity.
+
+    Attributes:
+        position: Position in the submodel's local space.
+        normal: Vertex normal.
+        alpha: Opacity. Only present in the file from
+            :data:`MAJOR_VERSION_VERTEX_ALPHA`; older files load fully opaque.
+    """
+
     position: Vector3 = field(default_factory=Vector3)
     normal: Vector3 = field(default_factory=Vector3)
-    alpha: float = 1.0
+    alpha: float = ALPHA_OPAQUE
 
 
 @dataclass
 class Keyframe:
+    """One animation key, holding both the rotation and position tracks.
+
+    The file stores rotation (ANIM/RANI) and position (PANI) in separate chunks
+    that may differ in length, but both are merged into this one list; see
+    :func:`_padded_keyframes` for how a short track is reconciled.
+
+    Attributes:
+        axis: Rotation axis, normalized on load.
+        angle: Rotation angle in the engine's fixed-point angle units.
+        position: Translation for this key.
+        rot_start_time: Start time of the rotation key, timed formats only.
+        pos_start_time: Start time of the position key, timed formats only.
+    """
+
     axis: Vector3 = field(default_factory=Vector3)
     angle: int = 0
     position: Vector3 = field(default_factory=Vector3)
@@ -150,8 +382,44 @@ class Keyframe:
 
 @dataclass
 class Submodel:
-    index: int = 0
-    parent: int = -1
+    """One SOBJ subobject: a named mesh plus its place in the hierarchy.
+
+    Mirrors the engine's ``bsp_info`` (polymodel_external.h:155-219). The
+    animation fields are populated from the separate ANIM/RANI and PANI chunks
+    rather than from the SOBJ record itself.
+
+    Attributes:
+        index: This submodel's own index, as written in the file.
+        parent: Parent's index, or :data:`NO_PARENT` for a root submodel.
+        normal: Separation-plane normal. Read but unused; kept for round trips.
+        point: Separation-plane point. Read but unused; kept for round trips.
+        offset: Translation from the parent submodel.
+        radius: Bounding radius about the submodel's own origin.
+        tree_offset: Offset of the BSP tree data. Not interpreted here.
+        data_offset: Offset of the render data. Not interpreted here.
+        geometric_center: Center of the geometry, present above
+            :data:`VERSION_GEOMETRIC_CENTER`.
+        name: Submodel name, which Blender uses as the object name.
+        props: Raw ``$``-command property string, preserved verbatim.
+        movement_type: How the subobject moves, or :data:`MOVEMENT_TYPE_NONE`.
+        movement_axis: Which axis it moves or rotates about.
+        flags: ``SOF_*`` bits derived from ``props`` by
+            :func:`_parse_submodel_flags`.
+        vertices: Vertex list in local space.
+        faces: Polygon list referencing ``vertices`` by index.
+        num_key_angles: Rotation key count.
+        num_key_pos: Position key count.
+        rot_track_min: First frame of the rotation track, timed formats only.
+        rot_track_max: Last frame of the rotation track, timed formats only.
+        pos_track_min: First frame of the position track, timed formats only.
+        pos_track_max: Last frame of the position track, timed formats only.
+        keyframes: Merged rotation and position keys.
+        children: Indices of child submodels. Computed by
+            :meth:`POFModel.build_hierarchy`, not stored in the file.
+    """
+
+    index: int = ROOT_SUBMODEL_INDEX
+    parent: int = NO_PARENT
     normal: Vector3 = field(default_factory=Vector3)
     point: Vector3 = field(default_factory=Vector3)
     offset: Vector3 = field(default_factory=Vector3)
@@ -161,7 +429,7 @@ class Submodel:
     geometric_center: Vector3 = field(default_factory=Vector3)
     name: str = ""
     props: str = ""
-    movement_type: int = -1
+    movement_type: int = MOVEMENT_TYPE_NONE
     movement_axis: int = 0
     flags: int = 0
 
@@ -182,6 +450,15 @@ class Submodel:
 
 @dataclass
 class GunBank:
+    """A firing position, from GPNT. Ground planes (GRND) reuse this shape.
+
+    Attributes:
+        parent: Submodel the point is attached to. Only stored in the file from
+            :data:`VERSION_GUNPOINT_PARENT`; older files load it as 0.
+        point: Position in the parent submodel's space.
+        normal: Firing direction.
+    """
+
     parent: int = 0
     point: Vector3 = field(default_factory=Vector3)
     normal: Vector3 = field(default_factory=Vector3)
@@ -189,12 +466,30 @@ class GunBank:
 
 @dataclass
 class WeaponBattery:
+    """A WBAT battery grouping gunpoints with the turrets that aim them.
+
+    Attributes:
+        gunpoints: Gun bank indices, capped at :data:`MAX_WB_GUNPOINTS`.
+        turrets: Turret submodel indices, capped at :data:`MAX_WB_TURRETS`.
+    """
+
     gunpoints: list[int] = field(default_factory=list)
     turrets: list[int] = field(default_factory=list)
 
 
 @dataclass
 class AttachPoint:
+    """A mounting point where another model can be joined to this one.
+
+    Attributes:
+        parent: Submodel the point is attached to.
+        point: Position in the parent submodel's space.
+        normal: Facing direction, from the ATCH chunk.
+        has_uvec: Whether an up vector was supplied by a NATH chunk. Without
+            one the attached model's roll about ``normal`` is undefined.
+        uvec: Up vector, valid only when ``has_uvec`` is true.
+    """
+
     parent: int = 0
     point: Vector3 = field(default_factory=Vector3)
     normal: Vector3 = field(default_factory=Vector3)
@@ -204,8 +499,28 @@ class AttachPoint:
 
 @dataclass
 class POFModel:
+    """A whole parsed model: header, textures, submodels and attachment data.
+
+    Attributes:
+        version: File version as ``major * 100 + minor``.
+        major_version: ``version // VERSION_MAJOR_SCALE``, cached because every
+            record-layout gate is expressed against the major version.
+        radius: Bounding radius of the whole model.
+        min_bound: Minimum corner of the bounding box.
+        max_bound: Maximum corner of the bounding box.
+        flags: ``PMF_*`` bits describing which optional data the model carries.
+        frame_min: Earliest animation frame across all submodels.
+        frame_max: Latest animation frame across all submodels.
+        textures: Texture names, indexed by :attr:`ModelFace.texnum`.
+        submodels: Submodels in file order.
+        gun_banks: GPNT firing positions.
+        weapon_batteries: WBAT batteries.
+        ground_planes: GRND planes, which reuse the :class:`GunBank` shape.
+        attach_points: ATCH mounting points.
+    """
+
     version: int = OBJFILE_VERSION
-    major_version: int = 23
+    major_version: int = OBJFILE_VERSION // VERSION_MAJOR_SCALE
     radius: float = 0.0
     min_bound: Vector3 = field(default_factory=Vector3)
     max_bound: Vector3 = field(default_factory=Vector3)
@@ -220,12 +535,16 @@ class POFModel:
     ground_planes: list[GunBank] = field(default_factory=list)
     attach_points: list[AttachPoint] = field(default_factory=list)
 
-    def build_hierarchy(self):
-        """Build children lists from parent indices.
+    def build_hierarchy(self) -> None:
+        """Rebuild every submodel's ``children`` list from its ``parent`` index.
 
-        ``children`` holds submodel *indices* (``sm.index``), not positions in
-        ``self.submodels``. SOBJ chunks can arrive out of order or with gaps, so
-        the two are not interchangeable, and callers look parents up by index.
+        Safe to call repeatedly: each list is cleared before being refilled.
+
+        Note:
+            ``children`` holds submodel *indices* (``sm.index``), not positions
+            in ``self.submodels``. SOBJ chunks can arrive out of order or with
+            gaps, so the two are not interchangeable, and callers look parents
+            up by index.
         """
         by_index = {sm.index: sm for sm in self.submodels}
         for sm in self.submodels:
@@ -240,63 +559,119 @@ class POFModel:
 # ---------------------------------------------------------------------------
 
 class POFReader:
-    """Reads binary POF data from a file-like object."""
+    """Reads little-endian POF primitives from a binary stream.
 
-    def __init__(self, stream: BinaryIO):
+    Every read is bounds-checked through :meth:`read_bytes`, so a truncated or
+    misaligned file raises :class:`EOFError` at the point of the short read
+    rather than silently returning garbage.
+
+    Attributes:
+        stream: The underlying binary stream, positioned at the next read.
+    """
+
+    def __init__(self, stream: BinaryIO) -> None:
+        """Wrap ``stream`` for reading.
+
+        Args:
+            stream: A readable, seekable binary stream.
+        """
         self.stream = stream
 
     def read_bytes(self, n: int) -> bytes:
+        """Read exactly ``n`` bytes.
+
+        Args:
+            n: Number of bytes to read.
+
+        Returns:
+            Exactly ``n`` bytes.
+
+        Raises:
+            EOFError: If fewer than ``n`` bytes remain.
+        """
         data = self.stream.read(n)
         if len(data) < n:
             raise EOFError(f"Expected {n} bytes, got {len(data)}")
         return data
 
     def read_int32(self) -> int:
+        """Read a signed 32-bit integer."""
         return struct.unpack("<i", self.read_bytes(4))[0]
 
     def read_uint32(self) -> int:
+        """Read an unsigned 32-bit integer."""
         return struct.unpack("<I", self.read_bytes(4))[0]
 
     def read_uint16(self) -> int:
+        """Read an unsigned 16-bit integer."""
         return struct.unpack("<H", self.read_bytes(2))[0]
 
     def read_uint8(self) -> int:
+        """Read a single unsigned byte."""
         return struct.unpack("<B", self.read_bytes(1))[0]
 
     def read_float(self) -> float:
+        """Read a 32-bit float."""
         return struct.unpack("<f", self.read_bytes(4))[0]
 
     def read_vector3(self) -> Vector3:
+        """Read three consecutive floats as a :class:`Vector3`."""
         x, y, z = struct.unpack("<fff", self.read_bytes(12))
         return Vector3(x, y, z)
 
     def read_string(self) -> str:
+        """Read a length-prefixed string.
+
+        Writers disagree about whether the stored length counts a trailing NUL,
+        so the terminator is stripped after decoding rather than assumed. Bytes
+        that are not valid ASCII are substituted, matching the tolerance in
+        :meth:`POFWriter.write_string`.
+
+        Returns:
+            The decoded string, without any trailing NUL.
+
+        Raises:
+            ValueError: If the length prefix is negative or exceeds
+                :data:`MAX_STRING_LENGTH`, meaning the stream is corrupt or
+                misaligned.
+        """
         length = self.read_int32()
-        if length < 0 or length > 10000:
+        if length < 0 or length > MAX_STRING_LENGTH:
             raise ValueError(f"Invalid string length: {length}")
         data = self.read_bytes(length)
         s = data.decode("ascii", errors="replace")
         return s.rstrip("\x00")
 
     def read_color_rgb(self) -> Color:
+        """Read three bytes as a :class:`Color` with 0..1 components."""
         r = self.read_uint8()
         g = self.read_uint8()
         b = self.read_uint8()
-        return Color(r / 255.0, g / 255.0, b / 255.0)
+        return Color(
+            r / COLOR_CHANNEL_MAX, g / COLOR_CHANNEL_MAX, b / COLOR_CHANNEL_MAX
+        )
 
     def read_chunk_header(self) -> tuple[int, int]:
-        """Read chunk ID and length. Returns (chunk_id, data_length)."""
+        """Read a chunk header.
+
+        Returns:
+            A ``(chunk_id, data_length)`` pair. The length excludes the eight
+            header bytes just consumed.
+        """
         chunk_id = self.read_uint32()
         length = self.read_int32()
         return chunk_id, length
 
-    def skip(self, n: int):
+    def skip(self, n: int) -> None:
+        """Advance the stream by ``n`` bytes, relative to the current position."""
         self.stream.seek(n, 1)
 
     def tell(self) -> int:
+        """Return the current absolute stream position."""
         return self.stream.tell()
 
-    def seek(self, pos: int):
+    def seek(self, pos: int) -> None:
+        """Move to absolute stream position ``pos``."""
         self.stream.seek(pos)
 
 # ---------------------------------------------------------------------------
@@ -304,33 +679,53 @@ class POFReader:
 # ---------------------------------------------------------------------------
 
 class POFWriter:
-    """Writes binary POF data to a file-like object."""
+    """Writes little-endian POF primitives to a binary stream.
 
-    def __init__(self, stream: BinaryIO):
+    Chunk bodies are built in a scratch :class:`io.BytesIO` and only then
+    written with their length prefix, because a chunk header has to state the
+    body size before the body exists.
+
+    Attributes:
+        stream: The underlying binary stream, positioned at the next write.
+    """
+
+    def __init__(self, stream: BinaryIO) -> None:
+        """Wrap ``stream`` for writing.
+
+        Args:
+            stream: A writable, seekable binary stream.
+        """
         self.stream = stream
 
-    def write_bytes(self, data: bytes):
+    def write_bytes(self, data: bytes) -> None:
+        """Write ``data`` verbatim."""
         self.stream.write(data)
 
-    def write_int32(self, value: int):
+    def write_int32(self, value: int) -> None:
+        """Write ``value`` as a signed 32-bit integer."""
         self.stream.write(struct.pack("<i", value))
 
-    def write_uint32(self, value: int):
+    def write_uint32(self, value: int) -> None:
+        """Write ``value`` as an unsigned 32-bit integer."""
         self.stream.write(struct.pack("<I", value))
 
-    def write_uint16(self, value: int):
+    def write_uint16(self, value: int) -> None:
+        """Write ``value`` as an unsigned 16-bit integer."""
         self.stream.write(struct.pack("<H", value))
 
-    def write_uint8(self, value: int):
+    def write_uint8(self, value: int) -> None:
+        """Write ``value`` as a single unsigned byte."""
         self.stream.write(struct.pack("<B", value))
 
-    def write_float(self, value: float):
+    def write_float(self, value: float) -> None:
+        """Write ``value`` as a 32-bit float."""
         self.stream.write(struct.pack("<f", value))
 
-    def write_vector3(self, v: Vector3):
+    def write_vector3(self, v: Vector3) -> None:
+        """Write ``v`` as three consecutive floats."""
         self.stream.write(struct.pack("<fff", v.x, v.y, v.z))
 
-    def write_string(self, s: str):
+    def write_string(self, s: str) -> None:
         """Write a length-prefixed, NUL-terminated string.
 
         The format is 8-bit ASCII but Blender object and material names are
@@ -350,27 +745,51 @@ class POFWriter:
         self.write_int32(len(encoded))
         self.write_bytes(encoded)
 
-    def write_color_rgb(self, c: Color):
-        self.write_uint8(int(c.r * 255) & 0xFF)
-        self.write_uint8(int(c.g * 255) & 0xFF)
-        self.write_uint8(int(c.b * 255) & 0xFF)
+    def write_color_rgb(self, c: Color) -> None:
+        """Write ``c`` as three bytes, scaled from 0..1 and clamped to a byte."""
+        self.write_uint8(int(c.r * COLOR_CHANNEL_MAX) & 0xFF)
+        self.write_uint8(int(c.g * COLOR_CHANNEL_MAX) & 0xFF)
+        self.write_uint8(int(c.b * COLOR_CHANNEL_MAX) & 0xFF)
 
-    def write_chunk_header(self, chunk_id: int, length: int):
+    def write_chunk_header(self, chunk_id: int, length: int) -> None:
+        """Write a chunk header.
+
+        Args:
+            chunk_id: Four-character code as produced by :func:`_fcc`.
+            length: Size of the chunk body, excluding these eight bytes.
+        """
         self.write_uint32(chunk_id)
         self.write_int32(length)
 
     def tell(self) -> int:
+        """Return the current absolute stream position."""
         return self.stream.tell()
 
-    def seek(self, pos: int):
+    def seek(self, pos: int) -> None:
+        """Move to absolute stream position ``pos``."""
         self.stream.seek(pos)
 
 # ---------------------------------------------------------------------------
 # Parsing Functions
 # ---------------------------------------------------------------------------
 
-def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int):
-    """Parse a SOBJ (subobject) chunk."""
+def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
+    """Parse one SOBJ chunk and store the submodel on ``model``.
+
+    Args:
+        reader: Reader positioned at the start of the chunk body.
+        model: Model to append to. Its ``version`` and ``major_version`` must
+            already be set, because they select the record layout.
+        chunk_end: Absolute offset of the end of this chunk. The caller seeks
+            here afterwards, so trailing fields this parser ignores are skipped
+            rather than mistaken for the next chunk.
+
+    Note:
+        The submodel is stored at ``model.submodels[sm.index]``, growing the
+        list with ``None`` placeholders as needed, because SOBJ chunks can
+        arrive out of order. :func:`parse_pof_stream` drops any placeholder that
+        is still unfilled once every chunk has been read.
+    """
     sm = Submodel()
     sm.index = reader.read_int32()
     sm.parent = reader.read_int32()
@@ -382,7 +801,7 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int):
     sm.tree_offset = reader.read_int32()
     sm.data_offset = reader.read_int32()
 
-    if model.version > 1805:
+    if model.version > VERSION_GEOMETRIC_CENTER:
         sm.geometric_center = reader.read_vector3()
 
     sm.name = reader.read_string()
@@ -405,10 +824,10 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int):
         sm.vertices[i].normal = reader.read_vector3()
 
     # Alpha per vertex (version >= 23)
-    if model.major_version >= 23:
+    if model.major_version >= MAJOR_VERSION_VERTEX_ALPHA:
         for i in range(n_verts):
             sm.vertices[i].alpha = reader.read_float()
-            if sm.vertices[i].alpha < 0.99:
+            if sm.vertices[i].alpha < ALPHA_OPAQUE_THRESHOLD:
                 model.flags |= PMF_ALPHA
 
     # Faces
@@ -432,7 +851,7 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int):
             face.vertices.append(FaceVertex(index=idx, u=u, v=v))
 
         # Lightmap UV diffs (version >= 21)
-        if model.major_version >= 21:
+        if model.major_version >= MAJOR_VERSION_LIGHTMAP:
             reader.read_float()  # xdiff
             reader.read_float()  # ydiff
 
@@ -447,10 +866,22 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int):
     model.submodels[sm.index] = sm
 
 
-def _parse_submodel_flags(sm: Submodel):
-    """Parse property string to set submodel flags."""
+def _parse_submodel_flags(sm: Submodel) -> None:
+    """Set ``sm.flags`` from the ``$``-command in the submodel's property string.
+
+    Only the first command is honoured, matching the engine: the string is split
+    at the first ``=`` into a command (including that ``=``) and its payload, and
+    the command is looked up case-insensitively. Everything except ``$rotate=``
+    is a straight command-to-flag mapping held in :data:`PROPERTY_COMMAND_FLAGS`.
+
+    Args:
+        sm: Submodel whose ``props`` is read and whose ``flags`` is updated
+            in place. Unrecognised commands leave ``flags`` untouched -- the raw
+            string is still preserved, so a command this add-on does not model
+            survives a round trip.
+    """
     props = sm.props.strip()
-    if len(props) < 3:
+    if len(props) < MIN_PROPS_LENGTH:
         return
 
     eq_pos = props.find("=")
@@ -461,51 +892,22 @@ def _parse_submodel_flags(sm: Submodel):
         command = props.lower().strip()
         data = ""
 
-    if command == "$rotate=":
+    if command == PROP_ROTATE:
         try:
             spin_rate = float(data)
-            if 0 < spin_rate <= 20:
-                sm.flags |= SOF_ROTATE
         except ValueError:
             log.warning(
-                "Submodel '%s': $rotate= expects a number, got %r", sm.name, data
+                "Submodel '%s': %s expects a number, got %r",
+                sm.name, PROP_ROTATE, data,
             )
-    elif command == "$jitter":
-        sm.flags |= SOF_JITTER
-    elif command == "$shell":
-        sm.flags |= SOF_SHELL
-    elif command == "$facing":
-        sm.flags |= SOF_FACING
-    elif command == "$frontface":
-        sm.flags |= SOF_FRONTFACE
-    elif command == "$glow=":
-        sm.flags |= SOF_GLOW
-    elif command == "$thruster=":
-        sm.flags |= SOF_THRUSTER
-    elif command.startswith("$fov="):
-        sm.flags |= SOF_TURRET
-    elif command == "$monitor01":
-        sm.flags |= SOF_MONITOR1
-    elif command == "$monitor02":
-        sm.flags |= SOF_MONITOR2
-    elif command == "$monitor03":
-        sm.flags |= SOF_MONITOR3
-    elif command == "$monitor04":
-        sm.flags |= SOF_MONITOR4
-    elif command == "$monitor05":
-        sm.flags |= SOF_MONITOR5
-    elif command == "$monitor06":
-        sm.flags |= SOF_MONITOR6
-    elif command == "$monitor07":
-        sm.flags |= SOF_MONITOR7
-    elif command == "$monitor08":
-        sm.flags |= SOF_MONITOR8
-    elif command == "$viewer":
-        sm.flags |= SOF_VIEWER
-    elif command == "$layer":
-        sm.flags |= SOF_LAYER
-    elif command == "$custom":
-        sm.flags |= SOF_CUSTOM
+            return
+        if 0 < spin_rate <= MAX_SPIN_RATE:
+            sm.flags |= SOF_ROTATE
+        return
+
+    flag = PROPERTY_COMMAND_FLAGS.get(command)
+    if flag is not None:
+        sm.flags |= flag
 
 
 # ---------------------------------------------------------------------------
@@ -513,13 +915,41 @@ def _parse_submodel_flags(sm: Submodel):
 # ---------------------------------------------------------------------------
 
 def parse_pof(data: bytes) -> POFModel:
-    """Parse a POF file from raw bytes and return a POFModel."""
+    """Parse a POF file held in memory.
+
+    Args:
+        data: Complete contents of a ``.pof`` or ``.oof`` file.
+
+    Returns:
+        The parsed model, with its hierarchy already built.
+
+    Raises:
+        ValueError: If the magic bytes or version are not acceptable.
+        EOFError: If the data is truncated.
+    """
     stream = io.BytesIO(data)
     return parse_pof_stream(stream)
 
 
 def parse_pof_stream(stream: BinaryIO) -> POFModel:
-    """Parse a POF file from a binary stream and return a POFModel."""
+    """Parse a POF file from a binary stream.
+
+    Chunks are dispatched by ID; an unrecognised chunk is skipped by seeking to
+    the end offset its own header declares, so an unfamiliar chunk costs data
+    but does not desynchronise the stream.
+
+    Args:
+        stream: Readable, seekable stream positioned at the file header.
+
+    Returns:
+        The parsed model, with its hierarchy already built.
+
+    Raises:
+        ValueError: If the magic bytes do not match :data:`POF_MAGIC`, or the
+            version falls outside :data:`MIN_OBJFILE_VERSION` ..
+            :data:`OBJFILE_VERSION`.
+        EOFError: If a chunk runs past the end of the stream.
+    """
     reader = POFReader(stream)
     model = POFModel()
 
@@ -529,22 +959,22 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         raise ValueError(f"Invalid POF magic: expected {POF_MAGIC!r}, got {magic!r}")
 
     version = reader.read_int32()
-    if version < 18:
-        version *= 100  # fix old version
+    if version < MAX_UNSCALED_VERSION:
+        version *= VERSION_MAJOR_SCALE  # a bare major version from an old tool
 
     if version < MIN_OBJFILE_VERSION or version > OBJFILE_VERSION:
         raise ValueError(f"Unsupported POF version: {version}")
 
     model.version = version
-    model.major_version = version // 100
+    model.major_version = version // VERSION_MAJOR_SCALE
 
-    if model.major_version >= 21:
+    if model.major_version >= MAJOR_VERSION_LIGHTMAP:
         model.flags |= PMF_LIGHTMAP_RES
-    if model.major_version >= 22:
+    if model.major_version >= MAJOR_VERSION_TIMED_ANIM:
         model.flags |= PMF_TIMED
 
     # Read chunks
-    timed = model.major_version >= 22
+    timed = model.major_version >= MAJOR_VERSION_TIMED_ANIM
 
     while True:
         pos = reader.tell()
@@ -580,7 +1010,7 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             model.gun_banks = []
             for _ in range(n_guns):
                 bank = GunBank()
-                if model.version >= 1908:
+                if model.version >= VERSION_GUNPOINT_PARENT:
                     bank.parent = reader.read_int32()
                 bank.point = reader.read_vector3()
                 bank.normal = reader.read_vector3()
@@ -594,12 +1024,12 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 n_gps = reader.read_int32()
                 for j in range(n_gps):
                     gp = reader.read_int32()
-                    if j < 8:
+                    if j < MAX_WB_GUNPOINTS:
                         wb.gunpoints.append(gp)
                 n_turrets = reader.read_int32()
                 for j in range(n_turrets):
                     t = reader.read_int32()
-                    if j < 8:
+                    if j < MAX_WB_TURRETS:
                         wb.turrets.append(t)
                 model.weapon_batteries.append(wb)
 
@@ -730,30 +1160,55 @@ def _padded_keyframes(keyframes: list[Keyframe], count: int) -> list[Keyframe]:
     (``ID_ANIM`` in polymodel.cpp), so a submodel with a shorter track has to be
     padded out or the reader runs off the end of the chunk. Repeating the last
     key holds the final pose; an empty track pads with a neutral key.
+
+    Args:
+        keyframes: Track to pad. A longer track is truncated to ``count``.
+        count: Exact number of keys the caller must write.
+
+    Returns:
+        A list of exactly ``count`` keyframes.
     """
     keys = list(keyframes[:count])
     if len(keys) < count:
-        filler = keys[-1] if keys else Keyframe(axis=Vector3(0.0, 0.0, 1.0))
+        filler = keys[-1] if keys else Keyframe(axis=Vector3(*DEFAULT_KEYFRAME_AXIS))
         keys.extend([filler] * (count - len(keys)))
     return keys
 
 
 def write_pof(model: POFModel) -> bytes:
-    """Serialize a POFModel to POF binary bytes."""
+    """Serialize a model to POF bytes.
+
+    Args:
+        model: Model to serialize. Its ``version`` selects the record layout.
+
+    Returns:
+        The complete file contents.
+    """
     stream = io.BytesIO()
     write_pof_stream(model, stream)
     return stream.getvalue()
 
 
-def write_pof_stream(model: POFModel, stream: BinaryIO):
-    """Write a POFModel to a binary stream."""
+def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
+    """Write a model to a binary stream.
+
+    Optional chunks are emitted only when the model carries the corresponding
+    data, so a model with no guns or attach points produces no GPNT or ATCH
+    chunk rather than an empty one.
+
+    Args:
+        model: Model to serialize. Its ``version`` and ``major_version`` select
+            which version-gated fields are written; they must agree with each
+            other or the result will not parse back.
+        stream: Writable binary stream.
+    """
     writer = POFWriter(stream)
 
     # Header
     writer.write_bytes(POF_MAGIC)
     writer.write_int32(model.version)
 
-    timed = model.major_version >= 22
+    timed = model.major_version >= MAJOR_VERSION_TIMED_ANIM
 
     # OHDR chunk
     ohdr_buf = io.BytesIO()
@@ -763,7 +1218,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
     ohdr_w.write_vector3(model.min_bound)
     ohdr_w.write_vector3(model.max_bound)
     ohdr_w.write_int32(1)  # 1 detail level
-    ohdr_w.write_int32(0)  # detail level 0 = first submodel
+    ohdr_w.write_int32(ROOT_SUBMODEL_INDEX)  # detail level 0 = root submodel
     writer.write_chunk_header(CHUNK_OHDR, ohdr_buf.tell())
     writer.write_bytes(ohdr_buf.getvalue())
 
@@ -789,7 +1244,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
         sobj_w.write_float(sm.radius)
         sobj_w.write_int32(sm.tree_offset)
         sobj_w.write_int32(sm.data_offset)
-        if model.version > 1805:
+        if model.version > VERSION_GEOMETRIC_CENTER:
             sobj_w.write_vector3(sm.geometric_center)
         sobj_w.write_string(sm.name)
         sobj_w.write_string(sm.props)
@@ -805,7 +1260,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
             sobj_w.write_vector3(v.normal)
 
         # Alpha per vertex (version >= 23)
-        if model.major_version >= 23:
+        if model.major_version >= MAJOR_VERSION_VERTEX_ALPHA:
             for v in sm.vertices:
                 sobj_w.write_float(v.alpha)
 
@@ -825,7 +1280,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
                 sobj_w.write_float(fv.u)
                 sobj_w.write_float(fv.v)
             # Lightmap UV diffs (version >= 21)
-            if model.major_version >= 21:
+            if model.major_version >= MAJOR_VERSION_LIGHTMAP:
                 sobj_w.write_float(0.0)
                 sobj_w.write_float(0.0)
 
@@ -838,7 +1293,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO):
         gpnt_w = POFWriter(gpnt_buf)
         gpnt_w.write_int32(len(model.gun_banks))
         for bank in model.gun_banks:
-            if model.version >= 1908:
+            if model.version >= VERSION_GUNPOINT_PARENT:
                 gpnt_w.write_int32(bank.parent)
             gpnt_w.write_vector3(bank.point)
             gpnt_w.write_vector3(bank.normal)

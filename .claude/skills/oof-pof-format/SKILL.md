@@ -10,8 +10,8 @@ Descent 3 model files (`.oof`, and `.pof` here) parse/write in
 it standalone to inspect any file:
 
 ```python
-import sys; sys.path.insert(0, "descent3_importer")
-import poformat
+import sys; sys.path.insert(0, ".")   # repo root
+from descent3_importer import poformat
 model = poformat.parse_pof(open("data/some.OOF", "rb").read())
 print(model.version, model.textures, len(model.submodels))
 ```

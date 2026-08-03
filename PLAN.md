@@ -1,9 +1,14 @@
 # Descent 3 OOF/POF Blender Import/Export Addon - Implementation Plan
 
 ## Environment
-- **Blender Installation**: `C:\Program Files\Blender Foundation\Blender 5.0`
-- **Addon Location**: `%APPDATA%\Blender Foundation\Blender\5.0\scripts\addons\descent3_importer\`
-- **Project Root**: `D:\dev\descent\blender-pof-plugin\`
+
+> These paths are examples. Blender's install location and version directory
+> differ per machine and per install source, so do not hardcode them --
+> `install.ps1` / `install.sh` discover them, and the `blender-addon-testing`
+> skill explains how to ask Blender for them directly.
+
+- **Addon Location**: `<blender user scripts>/addons/descent3_importer/`
+- **Project Root**: the repository root
 
 ---
 
@@ -170,18 +175,27 @@ For each Blender object being exported:
 ## File Structure
 
 ```
-D:\dev\descent\blender-pof-plugin\
+<repo root>/
 ├── PLAN.md                      # This file
+├── pyproject.toml               # pytest configuration
+├── install.ps1 / install.sh     # Add-on installers (discover Blender, deploy)
 ├── descent3_importer/            # Blender addon package
-│   ├── __init__.py              # Addon registration, ImportOperator, ExportOperator
-│   ├── poformat.py              # Binary POF/OOF parser & writer
-│   └── manifest.toml            # Blender 5.0 extension manifest
+│   ├── __init__.py              # Registration + menus; no bpy at import time
+│   ├── import_pof.py            # ImportPOF operator, POF -> Blender
+│   ├── export_pof.py            # ExportPOF operator, Blender -> POF
+│   ├── constants.py             # Values shared by both halves (no bpy)
+│   ├── poformat.py              # Binary POF/OOF parser & writer (no bpy)
+│   ├── texutil.py               # Texture-path resolution (no bpy)
+│   └── manifest.toml            # Inert: see the note below
 ├── tests/                        # Test suite
 │   ├── __init__.py
 │   ├── test_poformat.py         # Parser/writer unit tests
-│   ├── test_import.py           # Blender import integration tests
-│   ├── test_export.py           # Blender export integration tests
-│   ├── test_roundtrip.py        # Import-then-export roundtrip tests
+│   ├── test_roundtrip.py        # Write-then-parse roundtrip tests
+│   ├── test_texutil.py          # Texture-path resolution tests
+│   ├── test_fixtures.py         # Parser + texture resolution together
+│   ├── test_package_import.py   # Guards the bpy-free import contract
+│   ├── blender/                 # Scripts run by `blender --background`
+│   ├── fixtures/                # Committed .oof + .png test assets
 │   └── mock_data/               # Mock POF files
 │       ├── minimal_cube.pof     # Simplest valid model
 │       ├── empty_model.pof      # 0 submodels
@@ -190,6 +204,11 @@ D:\dev\descent\blender-pof-plugin\
 ├── polymodel.h                   # Reference: Descent 3 header (existing)
 └── polymodel_external.h          # Reference: Struct definitions (existing)
 ```
+
+> `descent3_importer/manifest.toml` is currently inert: Blender 4.2+ expects the
+> file to be named `blender_manifest.toml`, its `[tags]` table is not valid TOML,
+> and neither installer copies it. The add-on ships as a legacy add-on driven by
+> the `bl_info` dict in `__init__.py`.
 
 ---
 

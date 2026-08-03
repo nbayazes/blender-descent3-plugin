@@ -29,7 +29,7 @@
 set -u
 
 ADDON_ID="descent3_importer"
-REQUIRED_FILES="__init__.py poformat.py texutil.py"
+REQUIRED_FILES="__init__.py constants.py export_pof.py import_pof.py poformat.py texutil.py"
 TAB=$'\t'
 
 OPT_LIST=0

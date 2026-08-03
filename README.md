@@ -11,12 +11,15 @@ keyframes.
 ## Installation
 
 > **Important:** the add-on must be installed as a **package folder**, not as
-> loose files. It uses a relative import (`from . import poformat`), so the
-> three modules have to sit together inside a `descent3_importer/` directory:
+> loose files. It uses relative imports (`from . import poformat`), so all six
+> modules have to sit together inside a `descent3_importer/` directory:
 >
 > ```
 > scripts/addons/descent3_importer/
 >   ├── __init__.py
+>   ├── constants.py
+>   ├── export_pof.py
+>   ├── import_pof.py
 >   ├── poformat.py
 >   └── texutil.py
 > ```
@@ -198,12 +201,17 @@ Supported extensions and their priority order are defined by
 
 ## Development
 
-The parsing/writing (`poformat.py`) and texture-path logic (`texutil.py`) have
-**no `bpy` dependency**, so they can be unit-tested with plain Python:
+The parsing/writing (`poformat.py`), texture-path logic (`texutil.py`) and the
+shared `constants.py` have **no `bpy` dependency**. Neither does the package
+`__init__.py`, which defers its Blender imports into `register()` — so the
+whole package imports under plain Python and the suite runs without Blender:
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest -q
 ```
+
+`tests/test_package_import.py` guards that contract: it fails if a
+module-scope `import bpy` reappears in any of those modules.
 
 Test assets:
 
@@ -222,7 +230,10 @@ the `.claude/skills/blender-addon-testing` skill for the workflow, and
 
 ```
 descent3_importer/      the add-on (install this folder)
-  __init__.py           operators, import/export, Blender integration
+  __init__.py           registration and menu entries (no bpy at import time)
+  import_pof.py         ImportPOF operator and POF -> Blender conversion
+  export_pof.py         ExportPOF operator and Blender -> POF conversion
+  constants.py          values shared by the import and export halves (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
 tests/                  pytest suite, mock data, and fixtures

@@ -21,10 +21,10 @@ import bpy
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "descent3_importer"))
 
-import poformat  # noqa: E402
-from descent3_importer import export_pof, import_pof  # noqa: E402
+from descent3_importer import poformat  # noqa: E402
+from descent3_importer.export_pof import save_pof  # noqa: E402
+from descent3_importer.import_pof import load_pof  # noqa: E402
 
 FIXTURE = os.path.join(REPO, "tests", "fixtures", "textured_model", "textured_cube.oof")
 
@@ -101,7 +101,7 @@ source = poformat.parse_pof(open(FIXTURE, "rb").read())
 source_uvs = model_uvs(source)
 check("fixture has UVs to compare", len(source_uvs) > 0, f"{len(source_uvs)} pairs")
 
-import_pof(bpy.context, FIXTURE, FakeImportOp())
+load_pof(bpy.context, FIXTURE, FakeImportOp())
 
 in_blender = scene_uvs()
 check("import produced the same number of UVs",
@@ -110,7 +110,7 @@ check("import negates V (Descent top-left origin -> Blender bottom-left)",
       in_blender == [(u, -v) for u, v in source_uvs])
 
 out_path = os.path.join(tempfile.gettempdir(), "descent3_uv_roundtrip.pof")
-export_pof(bpy.context, out_path, FakeExportOp())
+save_pof(bpy.context, out_path, FakeExportOp())
 exported_uvs = model_uvs(poformat.parse_pof(open(out_path, "rb").read()))
 
 check("export negates V back", exported_uvs == source_uvs,

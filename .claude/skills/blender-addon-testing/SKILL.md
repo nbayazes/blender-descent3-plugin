@@ -5,9 +5,11 @@ description: Install, deploy, and headless-test the Descent 3 POF/OOF Blender ad
 
 # Testing the Descent 3 add-on in Blender
 
-pytest only covers the `bpy`-free code (`poformat.py`, `texutil.py`). Anything
-touching `bpy` (materials, images, mesh build, UV orientation, operator
-registration) must be verified by running real Blender headless.
+pytest only covers the `bpy`-free code (`poformat.py`, `texutil.py`,
+`constants.py`, and the package `__init__.py`, which defers its Blender
+imports into `register()`). Anything touching `bpy` (materials, images, mesh
+build, UV orientation, operator registration) must be verified by running
+real Blender headless.
 
 ## Locating Blender
 
@@ -88,7 +90,8 @@ The add-on uses a relative import (`from . import poformat`). It **must** be
 installed as a folder:
 
 ```
-scripts/addons/descent3_importer/{__init__.py, poformat.py, texutil.py}
+scripts/addons/descent3_importer/{__init__.py, constants.py, export_pof.py,
+                                 import_pof.py, poformat.py, texutil.py}
 ```
 
 If the `.py` files are dropped **loose** into `scripts/addons/` instead, Blender
@@ -97,7 +100,8 @@ can't load the package: the operator never registers and Blender warns
 "models import without textures" bug — the fixed code simply wasn't running.
 
 Copy **all** the `.py` files and clear `__pycache__`; deploying only some (e.g.
-forgetting `texutil.py`) makes the add-on fail to import. A running Blender
+forgetting `texutil.py` or `constants.py`) makes the add-on fail to import.
+`install.ps1` / `install.sh` copy and verify the whole set, so prefer them. A running Blender
 session loads the add-on once, so after redeploying, restart Blender or toggle
 the add-on off/on in Preferences.
 
@@ -123,12 +127,12 @@ does — start there, it already has the fake-operator scaffolding:
 ```python
 import bpy, sys, os
 sys.path.insert(0, r"<repo root>")
-from descent3_importer import import_pof
+from descent3_importer.import_pof import load_pof
 class FakeOp:
     import_guns = import_attach = False
     texture_dir = ""
     def report(self, level, msg): print("[REPORT]", level, msg)
-import_pof(bpy.context, r"...\model.oof", FakeOp())
+load_pof(bpy.context, r"...\model.oof", FakeOp())
 ```
 
 **B) Exercise the real operator** without touching the user's config: point

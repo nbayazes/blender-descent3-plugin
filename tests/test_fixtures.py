@@ -8,12 +8,9 @@ Run: python -m pytest tests/test_fixtures.py -v
 """
 
 import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from poformat import parse_pof
-from texutil import find_texture_image
+from descent3_importer.poformat import parse_pof
+from descent3_importer.texutil import find_texture_image
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "textured_model")
 OOF = os.path.join(FIXTURE_DIR, "textured_cube.oof")

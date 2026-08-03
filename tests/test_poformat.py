@@ -4,48 +4,24 @@ Run with: python -m pytest tests/test_poformat.py -v
 """
 
 import os
-import sys
 import struct
+
 import pytest
 
-# Add the addon directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from poformat import (
-    POFModel,
-    Submodel,
-    SubmodelVertex,
-    ModelFace,
-    FaceVertex,
-    GunBank,
-    WeaponBattery,
+from descent3_importer.poformat import (
     AttachPoint,
-    Vector3,
-    Color,
+    GunBank,
+    OBJFILE_VERSION,
+    POFModel,
     POFReader,
     POFWriter,
+    POF_MAGIC,
+    SOF_TURRET,
+    Submodel,
+    SubmodelVertex,
+    Vector3,
     parse_pof,
     write_pof,
-    POF_MAGIC,
-    OBJFILE_VERSION,
-    MIN_OBJFILE_VERSION,
-    CHUNK_OHDR,
-    CHUNK_TXTR,
-    CHUNK_SOBJ,
-    CHUNK_GPNT,
-    CHUNK_WBS,
-    CHUNK_ANIM,
-    CHUNK_PANI,
-    CHUNK_GRND,
-    CHUNK_ATCH,
-    SOF_ROTATE,
-    SOF_TURRET,
-    SOF_GLOW,
-    SOF_THRUSTER,
-    SOF_FACING,
-    SOF_JITTER,
-    PMF_ALPHA,
-    PMF_TIMED,
 )
 
 MOCK_DIR = os.path.join(os.path.dirname(__file__), "mock_data")

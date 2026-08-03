@@ -10,14 +10,9 @@ through ``write_pof`` and ``parse_pof``.
 Run with: python -m pytest tests/test_roundtrip.py -v
 """
 
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from poformat import (  # noqa: E402
+from descent3_importer.poformat import (
     AttachPoint,
     Color,
     FaceVertex,

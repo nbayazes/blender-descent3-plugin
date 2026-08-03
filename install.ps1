@@ -62,7 +62,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $AddonId       = 'descent3_importer'
-$RequiredFiles = @('__init__.py', 'poformat.py', 'texutil.py')
+$RequiredFiles = @(
+    '__init__.py',
+    'constants.py',
+    'export_pof.py',
+    'import_pof.py',
+    'poformat.py',
+    'texutil.py'
+)
 
 # ---------------------------------------------------------------- output helpers
 
