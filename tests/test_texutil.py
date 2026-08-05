@@ -1,5 +1,5 @@
 """
-Unit tests for texture-resolution helpers (descent3_importer/texutil.py).
+Unit tests for texture-resolution helpers (descent3_plugin/texutil.py).
 
 These cover the pure logic that maps a Descent 3 texture name to an image file
 on disk, without requiring Blender.
@@ -8,7 +8,7 @@ Run with: python -m pytest tests/test_texutil.py -v
 
 import os
 
-from descent3_importer.texutil import (
+from descent3_plugin.texutil import (
     IMAGE_EXTENSIONS,
     clean_texture_dir,
     find_texture_image,

@@ -5,10 +5,10 @@ faces, UV mapping, materials, submodel hierarchy, gun points, weapon batteries,
 attach points, and animation keyframes.
 
 This module deliberately has no module-scope ``bpy`` import. The operators and
-the conversion code live in :mod:`descent3_importer.import_pof` and
-:mod:`descent3_importer.export_pof`, which are pulled in only from
-:func:`register`. That keeps ``import descent3_importer`` -- and therefore
-``from descent3_importer.poformat import ...`` -- working in a plain Python
+the conversion code live in :mod:`descent3_plugin.import_pof` and
+:mod:`descent3_plugin.export_pof`, which are pulled in only from
+:func:`register`. That keeps ``import descent3_plugin`` -- and therefore
+``from descent3_plugin.poformat import ...`` -- working in a plain Python
 interpreter, which is what the pytest suite relies on.
 """
 

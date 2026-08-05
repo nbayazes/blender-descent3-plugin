@@ -5,7 +5,7 @@ minversion = "7.0"
 #
 # What puts the repo root on sys.path is tests/__init__.py plus pytest's
 # default prepend import mode, not this file -- that is what lets the tests
-# import `descent3_importer.poformat` instead of manipulating sys.path.
+# import `descent3_plugin.poformat` instead of manipulating sys.path.
 # Deleting tests/__init__.py would break them even with this config present.
 testpaths = ["tests"]
 python_files = ["test_*.py"]

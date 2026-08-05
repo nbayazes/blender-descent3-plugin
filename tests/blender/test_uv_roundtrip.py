@@ -22,9 +22,9 @@ import bpy
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
 
-from descent3_importer import poformat  # noqa: E402
-from descent3_importer.export_pof import save_pof  # noqa: E402
-from descent3_importer.import_pof import load_pof  # noqa: E402
+from descent3_plugin import poformat  # noqa: E402
+from descent3_plugin.export_pof import save_pof  # noqa: E402
+from descent3_plugin.import_pof import load_pof  # noqa: E402
 
 FIXTURE = os.path.join(REPO, "tests", "fixtures", "textured_model", "textured_cube.oof")
 

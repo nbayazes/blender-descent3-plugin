@@ -8,7 +8,8 @@ import struct
 
 import pytest
 
-from descent3_importer.poformat import (
+from descent3_plugin.mathutil import Vector3
+from descent3_plugin.poformat import (
     AttachPoint,
     GunBank,
     OBJFILE_VERSION,
@@ -19,65 +20,11 @@ from descent3_importer.poformat import (
     SOF_TURRET,
     Submodel,
     SubmodelVertex,
-    Vector3,
     parse_pof,
     write_pof,
 )
 
 MOCK_DIR = os.path.join(os.path.dirname(__file__), "mock_data")
-
-
-class TestVector3:
-    def test_creation(self):
-        v = Vector3(1.0, 2.0, 3.0)
-        assert v.x == 1.0
-        assert v.y == 2.0
-        assert v.z == 3.0
-
-    def test_add(self):
-        v1 = Vector3(1, 2, 3)
-        v2 = Vector3(4, 5, 6)
-        result = v1 + v2
-        assert result.x == 5
-        assert result.y == 7
-        assert result.z == 9
-
-    def test_sub(self):
-        v1 = Vector3(5, 6, 7)
-        v2 = Vector3(1, 2, 3)
-        result = v1 - v2
-        assert result.x == 4
-        assert result.y == 4
-        assert result.z == 4
-
-    def test_mul(self):
-        v = Vector3(1, 2, 3)
-        result = v * 2
-        assert result.x == 2
-        assert result.y == 4
-        assert result.z == 6
-
-    def test_magnitude(self):
-        v = Vector3(3, 4, 0)
-        assert v.magnitude() == pytest.approx(5.0)
-
-    def test_normalized(self):
-        v = Vector3(3, 0, 0)
-        n = v.normalized()
-        assert n.x == pytest.approx(1.0)
-        assert n.y == pytest.approx(0.0)
-        assert n.z == pytest.approx(0.0)
-
-    def test_normalized_zero(self):
-        v = Vector3(0, 0, 0)
-        n = v.normalized()
-        assert n.x == 0
-        assert n.y == 0
-        assert n.z == 0
-
-    def test_as_tuple(self):
-        v = Vector3(1, 2, 3)
-        assert v.as_tuple() == (1.0, 2.0, 3.0)
 
 
 class TestPOFReader:

@@ -11,15 +11,16 @@ keyframes.
 ## Installation
 
 > **Important:** the add-on must be installed as a **package folder**, not as
-> loose files. It uses relative imports (`from . import poformat`), so all six
-> modules have to sit together inside a `descent3_importer/` directory:
+> loose files. It uses relative imports (`from . import poformat`), so all
+> seven modules have to sit together inside a `descent3_plugin/` directory:
 >
 > ```
-> scripts/addons/descent3_importer/
+> scripts/addons/descent3_plugin/
 >   ├── __init__.py
 >   ├── constants.py
 >   ├── export_pof.py
 >   ├── import_pof.py
+>   ├── mathutil.py
 >   ├── poformat.py
 >   └── texutil.py
 > ```
@@ -61,12 +62,12 @@ warn about the loose-file mistake described above.
 
 ### Option 2 — install by hand
 
-1. Zip the `descent3_importer/` folder (so the zip contains the folder, not just
+1. Zip the `descent3_plugin/` folder (so the zip contains the folder, not just
    its files).
 2. In Blender: `Edit → Preferences → Add-ons → Install from Disk…`, choose the
    zip, then enable **"Import-Export: Descent 3 POF/OOF Importer/Exporter"**.
 
-Alternatively, copy the `descent3_importer/` folder straight into your Blender
+Alternatively, copy the `descent3_plugin/` folder straight into your Blender
 `scripts/addons/` directory and enable it in Preferences.
 
 Either way, after updating the files **restart Blender** (or toggle the add-on
@@ -197,12 +198,13 @@ for each texture name referenced by the model's faces:
 ```
 
 Supported extensions and their priority order are defined by
-`IMAGE_EXTENSIONS` in `descent3_importer/texutil.py`.
+`IMAGE_EXTENSIONS` in `descent3_plugin/texutil.py`.
 
 ## Development
 
-The parsing/writing (`poformat.py`), texture-path logic (`texutil.py`) and the
-shared `constants.py` have **no `bpy` dependency**. Neither does the package
+The parsing/writing (`poformat.py`), math primitives (`mathutil.py`),
+texture-path logic (`texutil.py`) and shared `constants.py` have
+**no `bpy` dependency**. Neither does the package
 `__init__.py`, which defers its Blender imports into `register()` — so the
 whole package imports under plain Python and the suite runs without Blender:
 
@@ -229,11 +231,12 @@ the `.claude/skills/blender-addon-testing` skill for the workflow, and
 ## Repository layout
 
 ```
-descent3_importer/      the add-on (install this folder)
+descent3_plugin/      the add-on (install this folder)
   __init__.py           registration and menu entries (no bpy at import time)
   import_pof.py         ImportPOF operator and POF -> Blender conversion
   export_pof.py         ExportPOF operator and Blender -> POF conversion
   constants.py          values shared by the import and export halves (no bpy)
+  mathutil.py           Vector3 and math helpers (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
 tests/                  pytest suite, mock data, and fixtures

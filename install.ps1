@@ -5,10 +5,10 @@
 .DESCRIPTION
     Finds every Blender install on this machine -- Steam (via libraryfolders.vdf),
     standalone installers, portable/unzipped builds, winget, and anything already on
-    PATH -- works out each one's major.minor version, and copies the descent3_importer
+    PATH -- works out each one's major.minor version, and copies the descent3_plugin
     package folder into that version's user add-ons directory:
 
-        %APPDATA%\Blender Foundation\Blender\<version>\scripts\addons\descent3_importer\
+        %APPDATA%\Blender Foundation\Blender\<version>\scripts\addons\descent3_plugin\
 
     The add-on MUST be installed as a package folder (it uses `from . import poformat`),
     so this script always copies the whole folder, never loose files.
@@ -28,13 +28,13 @@
 .PARAMETER Target
     Install into an explicit path, skipping detection. Accepts a version root
     (...\Blender\5.2), an add-ons directory (...\scripts\addons), or an existing
-    ...\scripts\addons\descent3_importer folder.
+    ...\scripts\addons\descent3_plugin folder.
 
 .PARAMETER DryRun
     Print what would be copied without touching the filesystem.
 
 .PARAMETER Clean
-    Delete the destination descent3_importer folder before copying, and remove any
+    Delete the destination descent3_plugin folder before copying, and remove any
     loose add-on .py files sitting directly in scripts\addons (a known bad install
     state that stops the add-on from loading).
 
@@ -61,15 +61,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$AddonId       = 'descent3_importer'
+$AddonId       = 'descent3_plugin'
 $RequiredFiles = @(
     '__init__.py',
     'constants.py',
     'export_pof.py',
     'import_pof.py',
+    'mathutil.py',
     'poformat.py',
     'texutil.py'
 )
+
+# Package folder names this add-on used to ship under. They declare the same
+# operator bl_idnames, so leaving one in place next to the new folder gives the
+# user two File > Import entries and lets Blender pick either one.
+$LegacyAddonIds = @('descent3_importer')
 
 # ---------------------------------------------------------------- output helpers
 
@@ -299,7 +305,7 @@ function Resolve-TargetPath {
     param([string]$Path)
 
     $leaf = Split-Path -Leaf $Path
-    if ($leaf -eq $AddonId)          { return (Split-Path -Parent $Path) }   # ...\addons\descent3_importer
+    if ($leaf -eq $AddonId)          { return (Split-Path -Parent $Path) }   # ...\addons\descent3_plugin
     if ($leaf -match '^\d+\.\d+$')   { return (Join-Path $Path 'scripts\addons') }  # ...\Blender\5.2
     return $Path                                                             # assume it is the addons dir
 }
@@ -324,6 +330,20 @@ function Install-Addon {
                 Write-Warn "would remove stray loose file $file from scripts\addons"
             } else {
                 Write-Warn "stray loose file in scripts\addons: $file -- re-run with -Clean to remove it (it can stop the add-on loading)"
+            }
+        }
+    }
+
+    # A folder from a previous package name is not an upgrade target -- it is a
+    # duplicate add-on. Always remove it, -Clean or not.
+    foreach ($legacy in $LegacyAddonIds) {
+        $legacyDir = Join-Path $AddonsDir $legacy
+        if (Test-Path -LiteralPath $legacyDir -PathType Container) {
+            if ($DryRun) {
+                Write-Warn "would remove previous add-on folder $legacyDir (renamed to $AddonId)"
+            } else {
+                Remove-Item -LiteralPath $legacyDir -Recurse -Force
+                Write-Warn "removed previous add-on folder $legacyDir (renamed to $AddonId)"
             }
         }
     }

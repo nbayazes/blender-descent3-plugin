@@ -12,7 +12,8 @@ Run with: python -m pytest tests/test_roundtrip.py -v
 
 import pytest
 
-from descent3_importer.poformat import (
+from descent3_plugin.mathutil import Vector3
+from descent3_plugin.poformat import (
     AttachPoint,
     Color,
     FaceVertex,
@@ -22,7 +23,6 @@ from descent3_importer.poformat import (
     POFModel,
     Submodel,
     SubmodelVertex,
-    Vector3,
     parse_pof,
     write_pof,
 )

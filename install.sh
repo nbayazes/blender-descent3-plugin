@@ -4,12 +4,12 @@
 #
 # Finds every Blender install -- Steam (via libraryfolders.vdf), distro packages,
 # .tar.xz/portable builds, Flatpak, Snap, macOS app bundles -- works out each one's
-# major.minor version, and copies the descent3_importer package folder into that
+# major.minor version, and copies the descent3_plugin package folder into that
 # version's user add-ons directory:
 #
-#   Linux    ${XDG_CONFIG_HOME:-~/.config}/blender/<ver>/scripts/addons/descent3_importer/
-#   macOS    ~/Library/Application Support/Blender/<ver>/scripts/addons/descent3_importer/
-#   Windows  %APPDATA%/Blender Foundation/Blender/<ver>/scripts/addons/descent3_importer/
+#   Linux    ${XDG_CONFIG_HOME:-~/.config}/blender/<ver>/scripts/addons/descent3_plugin/
+#   macOS    ~/Library/Application Support/Blender/<ver>/scripts/addons/descent3_plugin/
+#   Windows  %APPDATA%/Blender Foundation/Blender/<ver>/scripts/addons/descent3_plugin/
 #
 # The add-on MUST be installed as a package folder (it uses `from . import poformat`),
 # so this script always copies the whole folder, never loose files.
@@ -28,8 +28,12 @@
 
 set -u
 
-ADDON_ID="descent3_importer"
-REQUIRED_FILES="__init__.py constants.py export_pof.py import_pof.py poformat.py texutil.py"
+ADDON_ID="descent3_plugin"
+REQUIRED_FILES="__init__.py constants.py export_pof.py import_pof.py mathutil.py poformat.py texutil.py"
+# Package folder names this add-on used to ship under. They declare the same
+# operator bl_idnames, so leaving one in place next to the new folder gives the
+# user two File > Import entries and lets Blender pick either one.
+LEGACY_ADDON_IDS="descent3_importer"
 TAB=$'\t'
 
 OPT_LIST=0
@@ -388,6 +392,19 @@ install_addon() {
             warn "would remove stray loose file $f from scripts/addons"
         else
             warn "stray loose file in scripts/addons: $f -- re-run with --clean to remove it (it can stop the add-on loading)"
+        fi
+    done
+
+    # A folder from a previous package name is not an upgrade target -- it is a
+    # duplicate add-on. Always remove it, --clean or not.
+    for legacy in $LEGACY_ADDON_IDS; do
+        legacy_dir="$addons_dir/$legacy"
+        [ -d "$legacy_dir" ] || continue
+        if [ "$OPT_DRYRUN" -eq 1 ]; then
+            warn "would remove previous add-on folder $legacy_dir (renamed to $ADDON_ID)"
+        else
+            rm -rf "$legacy_dir"
+            warn "removed previous add-on folder $legacy_dir (renamed to $ADDON_ID)"
         fi
     done
 

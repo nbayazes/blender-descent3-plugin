@@ -1,8 +1,8 @@
 """Import side of the add-on: POF/OOF file to Blender objects.
 
 Holds the :class:`ImportPOF` operator and the conversion that turns a parsed
-:class:`~descent3_importer.poformat.POFModel` into meshes, materials and empties.
-The binary parsing itself lives in :mod:`descent3_importer.poformat`, which has
+:class:`~descent3_plugin.poformat.POFModel` into meshes, materials and empties.
+The binary parsing itself lives in :mod:`descent3_plugin.poformat`, which has
 no ``bpy`` dependency; everything in this module runs only inside Blender.
 """
 
@@ -33,7 +33,7 @@ from .poformat import AttachPoint, GunBank, ModelFace, POFModel, Submodel
 from .texutil import clean_texture_dir, find_texture_image
 
 # The log channel is the package, not this module, so console output keeps the
-# single "[descent3_importer]" prefix that register() configures.
+# single "[descent3_plugin]" prefix that register() configures.
 log = logging.getLogger(__package__)
 
 # ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ def _import_points(
         points: Objects exposing ``point`` and ``parent``, i.e. gun banks or
             attach points.
         name_prefix: Name prefix export recognises, from
-            :mod:`descent3_importer.constants`.
+            :mod:`descent3_plugin.constants`.
         display_type: Blender ``empty_display_type`` for the marker.
         display_size: Viewport size of the marker.
         collection: Collection the empties are linked into.

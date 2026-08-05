@@ -7,7 +7,7 @@
 > `install.ps1` / `install.sh` discover them, and the `blender-addon-testing`
 > skill explains how to ask Blender for them directly.
 
-- **Addon Location**: `<blender user scripts>/addons/descent3_importer/`
+- **Addon Location**: `<blender user scripts>/addons/descent3_plugin/`
 - **Project Root**: the repository root
 
 ---
@@ -179,11 +179,12 @@ For each Blender object being exported:
 ├── PLAN.md                      # This file
 ├── pyproject.toml               # pytest configuration
 ├── install.ps1 / install.sh     # Add-on installers (discover Blender, deploy)
-├── descent3_importer/            # Blender addon package
+├── descent3_plugin/            # Blender addon package
 │   ├── __init__.py              # Registration + menus; no bpy at import time
 │   ├── import_pof.py            # ImportPOF operator, POF -> Blender
 │   ├── export_pof.py            # ExportPOF operator, Blender -> POF
 │   ├── constants.py             # Values shared by both halves (no bpy)
+│   ├── mathutil.py              # Vector3 and math helpers (no bpy)
 │   ├── poformat.py              # Binary POF/OOF parser & writer (no bpy)
 │   ├── texutil.py               # Texture-path resolution (no bpy)
 │   └── manifest.toml            # Inert: see the note below
@@ -191,6 +192,7 @@ For each Blender object being exported:
 │   ├── __init__.py
 │   ├── test_poformat.py         # Parser/writer unit tests
 │   ├── test_roundtrip.py        # Write-then-parse roundtrip tests
+│   ├── test_mathutil.py         # Vector3 tests
 │   ├── test_texutil.py          # Texture-path resolution tests
 │   ├── test_fixtures.py         # Parser + texture resolution together
 │   ├── test_package_import.py   # Guards the bpy-free import contract
@@ -205,7 +207,7 @@ For each Blender object being exported:
 └── polymodel_external.h          # Reference: Struct definitions (existing)
 ```
 
-> `descent3_importer/manifest.toml` is currently inert: Blender 4.2+ expects the
+> `descent3_plugin/manifest.toml` is currently inert: Blender 4.2+ expects the
 > file to be named `blender_manifest.toml`, its `[tags]` table is not valid TOML,
 > and neither installer copies it. The add-on ships as a legacy add-on driven by
 > the `bl_info` dict in `__init__.py`.

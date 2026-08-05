@@ -1,13 +1,13 @@
 ---
 name: blender-addon-testing
-description: Install, deploy, and headless-test the Descent 3 POF/OOF Blender add-on. Use whenever changing descent3_importer/ and needing to confirm import/export works in real Blender (not just pytest) — verifying meshes, materials, textures, UVs, or the hierarchy without opening the GUI.
+description: Install, deploy, and headless-test the Descent 3 POF/OOF Blender add-on. Use whenever changing descent3_plugin/ and needing to confirm import/export works in real Blender (not just pytest) — verifying meshes, materials, textures, UVs, or the hierarchy without opening the GUI.
 ---
 
 # Testing the Descent 3 add-on in Blender
 
-pytest only covers the `bpy`-free code (`poformat.py`, `texutil.py`,
-`constants.py`, and the package `__init__.py`, which defers its Blender
-imports into `register()`). Anything touching `bpy` (materials, images, mesh
+pytest only covers the `bpy`-free code (`poformat.py`, `mathutil.py`,
+`texutil.py`, `constants.py`, and the package `__init__.py`, which defers its
+Blender imports into `register()`). Anything touching `bpy` (materials, images, mesh
 build, UV orientation, operator registration) must be verified by running
 real Blender headless.
 
@@ -70,9 +70,9 @@ $probe = & $blender --background --factory-startup --python-expr `
 $scripts = ($probe | Select-String '^BL_SCRIPTS (.+)$' | Select-Object -First 1).Matches[0].Groups[1].Value
 
 $repo   = git rev-parse --show-toplevel      # run from anywhere in the repo
-$addons = Join-Path $scripts "addons\descent3_importer"
+$addons = Join-Path $scripts "addons\descent3_plugin"
 New-Item -ItemType Directory -Force -Path $addons | Out-Null
-Copy-Item "$repo\descent3_importer\*.py" $addons -Force
+Copy-Item "$repo\descent3_plugin\*.py" $addons -Force
 if (Test-Path "$addons\__pycache__") { Remove-Item -Recurse -Force "$addons\__pycache__" }
 ```
 
@@ -90,8 +90,9 @@ The add-on uses a relative import (`from . import poformat`). It **must** be
 installed as a folder:
 
 ```
-scripts/addons/descent3_importer/{__init__.py, constants.py, export_pof.py,
-                                 import_pof.py, poformat.py, texutil.py}
+scripts/addons/descent3_plugin/{__init__.py, constants.py, export_pof.py,
+                               import_pof.py, mathutil.py, poformat.py,
+                               texutil.py}
 ```
 
 If the `.py` files are dropped **loose** into `scripts/addons/` instead, Blender
@@ -110,7 +111,7 @@ the add-on off/on in Preferences.
 ```python
 import bpy, addon_utils
 addon_utils.modules_refresh()
-addon_utils.enable("descent3_importer", default_set=True, persistent=True)
+addon_utils.enable("descent3_plugin", default_set=True, persistent=True)
 print(hasattr(bpy.types, "IMPORT_SCENE_OT_descent3_pof"))  # True == registered
 bpy.ops.wm.save_userpref()   # so it stays enabled next launch
 ```
@@ -127,7 +128,7 @@ does — start there, it already has the fake-operator scaffolding:
 ```python
 import bpy, sys, os
 sys.path.insert(0, r"<repo root>")
-from descent3_importer.import_pof import load_pof
+from descent3_plugin.import_pof import load_pof
 class FakeOp:
     import_guns = import_attach = False
     texture_dir = ""
@@ -136,11 +137,11 @@ load_pof(bpy.context, r"...\model.oof", FakeOp())
 ```
 
 **B) Exercise the real operator** without touching the user's config: point
-`BLENDER_USER_SCRIPTS` at a scratch dir containing `addons/descent3_importer/`,
+`BLENDER_USER_SCRIPTS` at a scratch dir containing `addons/descent3_plugin/`,
 then:
 ```python
 import addon_utils
-addon_utils.modules_refresh(); addon_utils.enable("descent3_importer")
+addon_utils.modules_refresh(); addon_utils.enable("descent3_plugin")
 bpy.ops.import_scene.descent3_pof(filepath=r"...\model.oof", texture_dir=r"...\tex")
 ```
 

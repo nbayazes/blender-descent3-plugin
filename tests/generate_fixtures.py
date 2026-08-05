@@ -19,13 +19,13 @@ import zlib
 # Run as a script, so the repo root is not on sys.path automatically.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from descent3_importer.poformat import (  # noqa: E402
+from descent3_plugin.mathutil import Vector3  # noqa: E402
+from descent3_plugin.poformat import (  # noqa: E402
     POFModel,
     Submodel,
     SubmodelVertex,
     ModelFace,
     FaceVertex,
-    Vector3,
     write_pof,
 )
 

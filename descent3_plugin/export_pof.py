@@ -1,8 +1,8 @@
 """Export side of the add-on: Blender objects to a POF/OOF file.
 
 Holds the :class:`ExportPOF` operator and the conversion that turns Blender
-meshes and empties into a :class:`~descent3_importer.poformat.POFModel`. The
-binary writing itself lives in :mod:`descent3_importer.poformat`, which has no
+meshes and empties into a :class:`~descent3_plugin.poformat.POFModel`. The
+binary writing itself lives in :mod:`descent3_plugin.poformat`, which has no
 ``bpy`` dependency; everything in this module runs only inside Blender.
 """
 
@@ -13,6 +13,7 @@ from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper
 
 from . import poformat
+from .mathutil import Vector3
 from .constants import (
     ATTACH_EMPTY_PREFIX,
     EXPORT_OT_IDNAME,
@@ -33,11 +34,10 @@ from .poformat import (
     POFModel,
     Submodel,
     SubmodelVertex,
-    Vector3,
 )
 
 # The log channel is the package, not this module, so console output keeps the
-# single "[descent3_importer]" prefix that register() configures.
+# single "[descent3_plugin]" prefix that register() configures.
 log = logging.getLogger(__package__)
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def _build_pof_model(
             defaults.
 
     Returns:
-        A model ready for :func:`descent3_importer.poformat.write_pof`, with its
+        A model ready for :func:`descent3_plugin.poformat.write_pof`, with its
         hierarchy already built.
     """
     version = int(operator.export_version) if operator else poformat.OBJFILE_VERSION
@@ -427,7 +427,7 @@ def _collect_points(
 
     Args:
         name_prefix: Name prefix import used, from
-            :mod:`descent3_importer.constants`.
+            :mod:`descent3_plugin.constants`.
         obj_to_index: Object name to submodel index, for resolving the parent.
 
     Returns:

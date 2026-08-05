@@ -6,12 +6,12 @@ description: Reference for the Descent 3 POF/OOF binary model format and how to 
 # Descent 3 POF/OOF binary format
 
 Descent 3 model files (`.oof`, and `.pof` here) parse/write in
-`descent3_importer/poformat.py`. The parser has **no `bpy` dependency**, so run
+`descent3_plugin/poformat.py`. The parser has **no `bpy` dependency**, so run
 it standalone to inspect any file:
 
 ```python
 import sys; sys.path.insert(0, ".")   # repo root
-from descent3_importer import poformat
+from descent3_plugin import poformat
 model = poformat.parse_pof(open("data/some.OOF", "rb").read())
 print(model.version, model.textures, len(model.submodels))
 ```

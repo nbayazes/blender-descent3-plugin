@@ -11,7 +11,7 @@ File format::
     Chunks: char[4] id + int32 length + byte[] data
 
 This module has no ``bpy`` dependency, so it can be exercised by the pytest
-suite outside Blender.
+suite outside Blender. The vector type it builds on lives in :mod:`mathutil`.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ import logging
 import struct
 from dataclasses import dataclass, field
 from typing import BinaryIO
+
+from .mathutil import Vector3
 
 log = logging.getLogger(__name__)
 
@@ -178,10 +180,6 @@ MAX_WB_GUNPOINTS = 8
 #: Turrets kept per weapon battery -- a separate engine array of the same size.
 MAX_WB_TURRETS = 8
 
-#: Magnitude below which a vector is treated as degenerate and normalizes to
-#: zero rather than dividing by something near zero.
-NORMALIZE_EPSILON = 1e-10
-
 #: Axis of the neutral key used to pad an empty animation track. Kept as a
 #: plain tuple so each *call* builds its own :class:`Vector3`; a module-level
 #: ``Vector3`` would be shared by every model padded in the session, where a
@@ -237,57 +235,6 @@ PROPERTY_COMMAND_FLAGS = {
 # ---------------------------------------------------------------------------
 # Data Classes
 # ---------------------------------------------------------------------------
-
-@dataclass
-class Vector3:
-    """A three-component vector, matching the engine's ``vector`` type.
-
-    Deliberately not ``mathutils.Vector``: this module has to stay importable
-    outside Blender so the parser can be unit-tested.
-
-    Attributes:
-        x: First component.
-        y: Second component.
-        z: Third component.
-    """
-
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-
-    def as_tuple(self) -> tuple[float, float, float]:
-        """Return the components as a plain ``(x, y, z)`` tuple."""
-        return (self.x, self.y, self.z)
-
-    def __add__(self, other: Vector3) -> Vector3:
-        """Return the component-wise sum of this vector and ``other``."""
-        return Vector3(self.x + other.x, self.y + other.y, self.z + other.z)
-
-    def __sub__(self, other: Vector3) -> Vector3:
-        """Return the component-wise difference of this vector and ``other``."""
-        return Vector3(self.x - other.x, self.y - other.y, self.z - other.z)
-
-    def __mul__(self, s: float) -> Vector3:
-        """Return this vector scaled by ``s``."""
-        return Vector3(self.x * s, self.y * s, self.z * s)
-
-    def magnitude(self) -> float:
-        """Return the Euclidean length of this vector."""
-        return (self.x**2 + self.y**2 + self.z**2) ** 0.5
-
-    def normalized(self) -> Vector3:
-        """Return a unit-length copy of this vector.
-
-        Returns:
-            A vector of length 1 in the same direction, or a zero vector if this
-            one is shorter than :data:`NORMALIZE_EPSILON`. Degenerate input is
-            common in real models, so it yields zero rather than raising.
-        """
-        m = self.magnitude()
-        if m < NORMALIZE_EPSILON:
-            return Vector3(0, 0, 0)
-        return Vector3(self.x / m, self.y / m, self.z / m)
-
 
 @dataclass
 class Color:
