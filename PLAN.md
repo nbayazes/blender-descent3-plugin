@@ -178,11 +178,14 @@ For each Blender object being exported:
 <repo root>/
 ├── PLAN.md                      # This file
 ├── pyproject.toml               # pytest configuration
+├── descent3.example.toml        # Template for a project config
 ├── install.ps1 / install.sh     # Add-on installers (discover Blender, deploy)
 ├── descent3_plugin/            # Blender addon package
 │   ├── __init__.py              # Registration + menus; no bpy at import time
 │   ├── import_pof.py            # ImportPOF operator, POF -> Blender
 │   ├── export_pof.py            # ExportPOF operator, Blender -> POF
+│   ├── config.py                # Per-project descent3.toml (no bpy)
+│   ├── preferences.py           # Per-user add-on preferences
 │   ├── constants.py             # Values shared by both halves (no bpy)
 │   ├── mathutil.py              # Vector3 and math helpers (no bpy)
 │   ├── poformat.py              # Binary POF/OOF parser & writer (no bpy)
@@ -192,6 +195,8 @@ For each Blender object being exported:
 │   ├── __init__.py
 │   ├── test_poformat.py         # Parser/writer unit tests
 │   ├── test_roundtrip.py        # Write-then-parse roundtrip tests
+│   ├── test_config.py           # Project config tests
+│   ├── test_version_features.py # Version matrix + per-version roundtrip
 │   ├── test_mathutil.py         # Vector3 tests
 │   ├── test_texutil.py          # Texture-path resolution tests
 │   ├── test_fixtures.py         # Parser + texture resolution together

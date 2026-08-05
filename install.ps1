@@ -64,11 +64,13 @@ $ErrorActionPreference = 'Stop'
 $AddonId       = 'descent3_plugin'
 $RequiredFiles = @(
     '__init__.py',
+    'config.py',
     'constants.py',
     'export_pof.py',
     'import_pof.py',
     'mathutil.py',
     'poformat.py',
+    'preferences.py',
     'texutil.py'
 )
 

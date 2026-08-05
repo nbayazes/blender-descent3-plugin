@@ -79,3 +79,26 @@ GUN_EMPTY_PREFIX = "Gun_"
 
 #: Name prefix for empties representing ATCH attach points.
 ATTACH_EMPTY_PREFIX = "Attach_"
+
+# ---------------------------------------------------------------------------
+# Mesh naming
+# ---------------------------------------------------------------------------
+
+#: Fallback name stem for a submodel whose SOBJ record has an empty name.
+SUBMODEL_FALLBACK_PREFIX = "Submodel_"
+
+#: Name of the UV layer created on import. "UVMap" is Blender's own default,
+#: which is what makes the layer the active one for new meshes.
+UV_LAYER_NAME = "UVMap"
+
+# ---------------------------------------------------------------------------
+# Viewport markers
+# ---------------------------------------------------------------------------
+# Defaults only. The user can override both in the add-on preferences.
+
+#: Viewport size of a gun-point empty. Larger than the attach-point marker so
+#: the two are distinguishable at a glance.
+GUN_EMPTY_DISPLAY_SIZE = 0.3
+
+#: Viewport size of an attach-point empty.
+ATTACH_EMPTY_DISPLAY_SIZE = 0.2

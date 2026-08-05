@@ -1,0 +1,76 @@
+# Example project configuration for the Descent 3 Blender add-on.
+#
+# Copy this to `descent3.toml` at your project root and delete what you do not
+# need. The add-on searches for `descent3.toml` in the folder of the model being
+# imported or exported and then upwards through its parents, so one file at the
+# project root covers every model beneath it. A file closer to a model wins,
+# which lets a single asset opt out of a project-wide rule.
+#
+# Every setting below is optional and every commented-out value is the default,
+# so a project with no `descent3.toml` behaves exactly as the add-on always has.
+#
+# WHAT BELONGS HERE
+#   Conventions the importer and the exporter must agree on. If import names a
+#   gun empty `Gun_0` and export looks for `gun.0`, the point is silently
+#   dropped -- so both halves read this one file.
+#
+# WHAT DOES NOT
+#   Personal settings. Where *your* copy of the game's textures lives and how
+#   big you like the viewport markers belong in the add-on preferences
+#   (Edit > Preferences > Add-ons > Descent 3 POF/OOF), so they follow you
+#   between projects instead of ending up in someone else's repository.
+#
+#   Format constants. Version gates, chunk IDs and flag bits are facts about
+#   the POF binary format, not settings; there is deliberately no way to
+#   configure them, because a project that changed one would just write models
+#   the game cannot load.
+
+
+# Object naming. These are the round-trip-critical settings: export identifies
+# gun and attach points purely by name prefix, so whatever import writes, export
+# has to look for.
+[naming]
+# Prefix for the empties created from the model's gun points.
+# gun_prefix = "Gun_"
+
+# Prefix for the empties created from the model's attach points.
+# attach_prefix = "Attach_"
+
+# Name stem used when a submodel's record carries no name of its own.
+# submodel_fallback_prefix = "Submodel_"
+
+# Name of the UV layer created on import. Blender's own default is "UVMap",
+# which is what makes the layer the active one for a new mesh; change this only
+# if your pipeline expects something else.
+# uv_layer = "UVMap"
+
+
+# Texture resolution. POF files store a bare texture name with no extension, so
+# the add-on has to guess which file on disk it means.
+[textures]
+# Extensions tried, in priority order. The first match wins, so put lossless
+# formats first unless you specifically want the compressed copy.
+# extensions = [".png", ".bmp", ".tga", ".jpg", ".jpeg", ".ogf", ".pcx"]
+
+# Extra folders to search, ahead of the model's own folder. Relative paths
+# resolve against THIS FILE, not your working directory, so a project checked
+# into version control keeps working wherever it is cloned.
+# search_dirs = ["textures", "../shared/textures"]
+
+# Full search order, most specific first:
+#   1. the Texture Folder typed into the import dialog
+#   2. the directories listed above
+#   3. the model's own folder
+#   4. the Texture Library set in the add-on preferences
+
+
+# Export targets.
+[export]
+# POF version new files target, as major * 100 + minor. Usually pinned per
+# project, because it is a property of the game build being modded.
+#   2300  v23.00, Descent 3 retail
+#   2200  v22.00, timed animation
+#   2100  v21.00, lightmap UVs
+# The export dialog's POF Version starts on "From project config", which uses
+# this value; picking a specific version there overrides it for that export.
+# version = 2300

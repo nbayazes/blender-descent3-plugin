@@ -39,7 +39,9 @@ def clean_texture_dir(raw: str) -> str:
 
 
 def find_texture_image(
-    texture_name: str, search_dirs: Sequence[str]
+    texture_name: str,
+    search_dirs: Sequence[str],
+    extensions: Sequence[str] = tuple(IMAGE_EXTENSIONS),
 ) -> str | None:
     """Return the path of an image file matching ``texture_name``, or None.
 
@@ -54,6 +56,9 @@ def find_texture_image(
         search_dirs: Directories to search, in priority order. Entries that are
             empty or are not directories are skipped. Must be re-iterable: it is
             walked once to search and again to report a failure.
+        extensions: Extensions to try, in priority order, lower-cased and
+            dot-prefixed. Defaults to :data:`IMAGE_EXTENSIONS`; a project can
+            override the order through its configuration.
 
     Returns:
         The full path of the first matching image, or ``None`` if no directory
@@ -65,7 +70,7 @@ def find_texture_image(
         if not directory or not os.path.isdir(directory):
             continue
         # 1) Fast path: exact stem + a known extension.
-        for ext in IMAGE_EXTENSIONS:
+        for ext in extensions:
             path = os.path.join(directory, texture_name + ext)
             if os.path.isfile(path):
                 log.info("Found texture: %s", path)
@@ -74,7 +79,7 @@ def find_texture_image(
         try:
             for fn in os.listdir(directory):
                 stem, ext = os.path.splitext(fn)
-                if ext.lower() in IMAGE_EXTENSIONS and stem.lower() == name_lower:
+                if ext.lower() in extensions and stem.lower() == name_lower:
                     path = os.path.join(directory, fn)
                     log.info("Found texture (case-insensitive): %s", path)
                     return path

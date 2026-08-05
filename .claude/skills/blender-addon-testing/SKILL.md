@@ -6,8 +6,8 @@ description: Install, deploy, and headless-test the Descent 3 POF/OOF Blender ad
 # Testing the Descent 3 add-on in Blender
 
 pytest only covers the `bpy`-free code (`poformat.py`, `mathutil.py`,
-`texutil.py`, `constants.py`, and the package `__init__.py`, which defers its
-Blender imports into `register()`). Anything touching `bpy` (materials, images, mesh
+`texutil.py`, `config.py`, `constants.py`, and the package `__init__.py`,
+which defers its Blender imports into `register()`). Anything touching `bpy` (materials, images, mesh
 build, UV orientation, operator registration) must be verified by running
 real Blender headless.
 
@@ -90,9 +90,9 @@ The add-on uses a relative import (`from . import poformat`). It **must** be
 installed as a folder:
 
 ```
-scripts/addons/descent3_plugin/{__init__.py, constants.py, export_pof.py,
-                               import_pof.py, mathutil.py, poformat.py,
-                               texutil.py}
+scripts/addons/descent3_plugin/{__init__.py, config.py, constants.py,
+                               export_pof.py, import_pof.py, mathutil.py,
+                               poformat.py, preferences.py, texutil.py}
 ```
 
 If the `.py` files are dropped **loose** into `scripts/addons/` instead, Blender

@@ -12,16 +12,18 @@ keyframes.
 
 > **Important:** the add-on must be installed as a **package folder**, not as
 > loose files. It uses relative imports (`from . import poformat`), so all
-> seven modules have to sit together inside a `descent3_plugin/` directory:
+> nine modules have to sit together inside a `descent3_plugin/` directory:
 >
 > ```
 > scripts/addons/descent3_plugin/
 >   ├── __init__.py
+>   ├── config.py
 >   ├── constants.py
 >   ├── export_pof.py
 >   ├── import_pof.py
 >   ├── mathutil.py
 >   ├── poformat.py
+>   ├── preferences.py
 >   └── texutil.py
 > ```
 >
@@ -197,14 +199,71 @@ for each texture name referenced by the model's faces:
         create a blank material named after the texture and report it missing
 ```
 
-Supported extensions and their priority order are defined by
-`IMAGE_EXTENSIONS` in `descent3_plugin/texutil.py`.
+Supported extensions and their priority order default to `IMAGE_EXTENSIONS`
+in `descent3_plugin/texutil.py`, and a project can override them (see
+Settings below).
+
+## Settings
+
+Settings live in one of three places, chosen by who owns the value.
+
+### Project settings — `descent3.toml`
+
+Conventions the importer and exporter must agree on. Export identifies gun
+and attach points purely by name prefix, so if import writes `Gun_0` and
+export looks for `gun.0`, the point is silently dropped — both halves read
+this one file.
+
+Put a `descent3.toml` at your project root; the add-on searches from the
+model's folder upwards, so one file covers every model beneath it, and a
+file closer to a model wins. Copy `descent3.example.toml` to start — it
+documents every key and is fully commented out, so copying it verbatim
+changes nothing.
+
+```toml
+[naming]
+gun_prefix = "Muzzle_"
+
+[textures]
+# relative to this file, not your working directory
+search_dirs = ["../shared/textures"]
+
+[export]
+version = 2200
+```
+
+A missing file means defaults, which are exactly the add-on's behaviour
+before configuration existed. A malformed file degrades to those defaults
+and reports the problem rather than blocking the import, and unknown keys
+are reported so a typo does not fail silently.
+
+### User settings — add-on preferences
+
+`Edit → Preferences → Add-ons → Descent 3 POF/OOF`. These follow you between
+projects and stay out of anyone else's repository: your own texture library
+folder, and the viewport size of the gun and attach markers.
+
+Texture search order, most specific first:
+
+1. the import dialog's **Texture Folder**
+2. `search_dirs` from the project's `descent3.toml`
+3. the model's own folder
+4. the **Texture Library** from preferences
+
+### Format constants — not configurable
+
+Version gates, chunk IDs and flag bits are facts about the POF binary
+format, not settings. They live in `poformat.py` and there is deliberately
+no way to override them: a project that changed one would write models the
+game cannot load. The supported version matrix is declared once as
+`VersionFeatures`, which the reader and writer both consult, so the two
+cannot disagree about a record's layout.
 
 ## Development
 
 The parsing/writing (`poformat.py`), math primitives (`mathutil.py`),
-texture-path logic (`texutil.py`) and shared `constants.py` have
-**no `bpy` dependency**. Neither does the package
+texture-path logic (`texutil.py`), project `config.py` and shared
+`constants.py` have **no `bpy` dependency**. Neither does the package
 `__init__.py`, which defers its Blender imports into `register()` — so the
 whole package imports under plain Python and the suite runs without Blender:
 
@@ -235,10 +294,13 @@ descent3_plugin/      the add-on (install this folder)
   __init__.py           registration and menu entries (no bpy at import time)
   import_pof.py         ImportPOF operator and POF -> Blender conversion
   export_pof.py         ExportPOF operator and Blender -> POF conversion
+  config.py             per-project descent3.toml settings (no bpy)
+  preferences.py        per-user add-on preferences
   constants.py          values shared by the import and export halves (no bpy)
   mathutil.py           Vector3 and math helpers (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
+descent3.example.toml   documented template for a project config
 tests/                  pytest suite, mock data, and fixtures
 polymodel.{cpp,h}       Descent 3 source reference for the format
 ```

@@ -13,11 +13,10 @@ from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper
 
 from . import poformat
+from .config import CONFIG_FILENAME, Config, config_for_path
 from .mathutil import Vector3
 from .constants import (
-    ATTACH_EMPTY_PREFIX,
     EXPORT_OT_IDNAME,
-    GUN_EMPTY_PREFIX,
     POF_FILENAME_EXT,
     POF_FILTER_GLOB,
     PROP_KEY_FLAGS,
@@ -44,16 +43,29 @@ log = logging.getLogger(__package__)
 # Export-side constants
 # ---------------------------------------------------------------------------
 
+#: Identifier meaning "whatever the project's descent3.toml asks for".
+#:
+#: This is an explicit dropdown entry rather than a heuristic. The config that
+#: applies is the one beside the *destination*, which is not known until the
+#: file browser closes, so the dialog cannot honestly pre-select the project's
+#: version. Making "use the project's setting" a visible choice means the user
+#: can see which one they are getting instead of the add-on guessing whether
+#: they meant the default they never touched.
+EXPORT_VERSION_FROM_CONFIG = "CONFIG"
+
 #: Versions offered in the export dialog, as ``(identifier, label, tooltip)``.
 #: Identifiers are the ``major * 100 + minor`` version written to the file.
 EXPORT_VERSION_ITEMS = [
+    (EXPORT_VERSION_FROM_CONFIG, "From project config",
+     "Use the version set in the project's descent3.toml, or v23.00 if there "
+     "is none"),
     ("2300", "v23.00 (Latest)", "Descent 3 retail version"),
     ("2200", "v22.00", "Timed animation support"),
     ("2100", "v21.00", "Lightmap UV support"),
 ]
 
-#: Default export version, matching the newest entry above.
-DEFAULT_EXPORT_VERSION = str(poformat.OBJFILE_VERSION)
+#: Default selection: defer to the project.
+DEFAULT_EXPORT_VERSION = EXPORT_VERSION_FROM_CONFIG
 
 #: Seed for the bounding-box accumulator, chosen large enough that the first
 #: vertex compared always replaces it on both the min and max side.
@@ -133,6 +145,12 @@ def save_pof(
         ``{"FINISHED"}`` on success, or ``{"CANCELLED"}`` if there was nothing
         to export or the file could not be written.
     """
+    config, config_warnings = config_for_path(filepath)
+    for warning in config_warnings:
+        log.warning("%s: %s", config.source_path or CONFIG_FILENAME, warning)
+        if operator:
+            operator.report({"WARNING"}, f"config: {warning}")
+
     if operator and operator.export_selected:
         objects = [obj for obj in context.selected_objects if obj.type == "MESH"]
     else:
@@ -143,7 +161,7 @@ def save_pof(
             operator.report({"WARNING"}, "No mesh objects to export")
         return {"CANCELLED"}
 
-    model = _build_pof_model(context, objects, operator)
+    model = _build_pof_model(context, objects, operator, config)
 
     try:
         data = poformat.write_pof(model)
@@ -164,6 +182,7 @@ def _build_pof_model(
     context: bpy.types.Context,
     objects: list[bpy.types.Object],
     operator: ExportPOF | None = None,
+    config: Config | None = None,
 ) -> POFModel:
     """Build a :class:`POFModel` from Blender objects.
 
@@ -173,19 +192,24 @@ def _build_pof_model(
         objects: Mesh objects to export, in the order they become submodels.
         operator: Operator carrying the export options, or ``None`` for
             defaults.
+        config: Project configuration. ``None`` resolves to the built-in
+            defaults, which match the add-on's behaviour before configuration
+            existed.
 
     Returns:
         A model ready for :func:`descent3_plugin.poformat.write_pof`, with its
         hierarchy already built.
     """
-    version = int(operator.export_version) if operator else poformat.OBJFILE_VERSION
+    if config is None:
+        config = Config()
+    version = _resolve_version(operator, config)
     major = version // poformat.VERSION_MAJOR_SCALE
-    timed = major >= poformat.MAJOR_VERSION_TIMED_ANIM
+    features = poformat.features_for(version, major)
 
     model = POFModel(version=version, major_version=major)
-    if major >= poformat.MAJOR_VERSION_LIGHTMAP:
+    if features.lightmap_uv:
         model.flags |= poformat.PMF_LIGHTMAP_RES
-    if timed:
+    if features.timed_anim:
         model.flags |= poformat.PMF_TIMED
 
     # Submodel index is the object's position in this list, so parents can be
@@ -215,7 +239,9 @@ def _build_pof_model(
                 point=point,
                 normal=Vector3(*DEFAULT_POINT_NORMAL),
             )
-            for point, parent in _collect_points(GUN_EMPTY_PREFIX, obj_to_index)
+            for point, parent in _collect_points(
+                config.naming.gun_prefix, obj_to_index
+            )
         ]
 
     if operator and operator.export_attach:
@@ -225,12 +251,35 @@ def _build_pof_model(
                 point=point,
                 normal=Vector3(*DEFAULT_POINT_NORMAL),
             )
-            for point, parent in _collect_points(ATTACH_EMPTY_PREFIX, obj_to_index)
+            for point, parent in _collect_points(
+                config.naming.attach_prefix, obj_to_index
+            )
         ]
 
     model.build_hierarchy()
 
     return model
+
+
+def _resolve_version(operator: ExportPOF | None, config: Config) -> int:
+    """Return the POF version to write.
+
+    Args:
+        operator: Operator carrying the dialog selection, or ``None``.
+        config: Project configuration resolved from the destination path.
+
+    Returns:
+        The project's configured version unless the dialog names a specific
+        one. Without an operator -- headless and scripted exports -- the
+        project's version always applies, so a script and the UI's default
+        agree instead of quietly targeting different builds.
+    """
+    if operator is None:
+        return config.export.version
+    selection = operator.export_version
+    if selection == EXPORT_VERSION_FROM_CONFIG:
+        return config.export.version
+    return int(selection)
 
 
 def _collect_textures(objects: list[bpy.types.Object]) -> list[str]:
@@ -426,8 +475,8 @@ def _collect_points(
     """Collect empties whose name marks them as gun or attach points.
 
     Args:
-        name_prefix: Name prefix import used, from
-            :mod:`descent3_plugin.constants`.
+        name_prefix: Name prefix import used, from the project's naming
+            configuration.
         obj_to_index: Object name to submodel index, for resolving the parent.
 
     Returns:

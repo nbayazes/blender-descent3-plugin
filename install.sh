@@ -29,7 +29,7 @@
 set -u
 
 ADDON_ID="descent3_plugin"
-REQUIRED_FILES="__init__.py constants.py export_pof.py import_pof.py mathutil.py poformat.py texutil.py"
+REQUIRED_FILES="__init__.py config.py constants.py export_pof.py import_pof.py mathutil.py poformat.py preferences.py texutil.py"
 # Package folder names this add-on used to ship under. They declare the same
 # operator bl_idnames, so leaving one in place next to the new folder gives the
 # user two File > Import entries and lets Blender pick either one.

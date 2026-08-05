@@ -32,14 +32,19 @@ from . import constants
 
 #: Submodules that import ``bpy``, in registration order. Each exposes a
 #: ``classes`` tuple of the bpy types it wants registered.
-_SUBMODULE_NAMES = ("import_pof", "export_pof")
+_SUBMODULE_NAMES = ("preferences", "import_pof", "export_pof")
 
-#: Modules reloaded when the add-on is re-enabled, in dependency order.
-#: ``constants`` comes first because the submodules copy its values into their
-#: own globals with ``from .constants import ...`` at import time -- reloading
-#: it afterwards would leave them holding the previous values. The menu funcs
-#: below are the only call-time readers of ``constants``.
-_RELOAD_NAMES = ("constants",) + _SUBMODULE_NAMES
+#: Modules reloaded when the add-on is re-enabled, in dependency order. The
+#: bpy-free modules come first: every module here copies values out of the ones
+#: it imports with ``from .x import ...`` at import time, so reloading a
+#: dependency after its dependents would leave them holding stale values.
+_RELOAD_NAMES = (
+    "constants",
+    "mathutil",
+    "texutil",
+    "poformat",
+    "config",
+) + _SUBMODULE_NAMES
 
 #: Exactly the classes :func:`register` installed, so :func:`unregister` removes
 #: those same objects. Re-deriving them from ``sys.modules`` risks unregistering

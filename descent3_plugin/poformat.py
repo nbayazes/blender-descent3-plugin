@@ -73,6 +73,63 @@ MAJOR_VERSION_TIMED_ANIM = 22
 #: normals.
 MAJOR_VERSION_VERTEX_ALPHA = 23
 
+
+@dataclass(frozen=True)
+class VersionFeatures:
+    """Which optional fields a given POF version's record layout carries.
+
+    The reader and the writer must agree on every one of these or they disagree
+    about how many bytes a record occupies, which corrupts everything after it.
+    Both derive their answer from :func:`features_for`, so a threshold can only
+    be changed in one place.
+
+    Attributes:
+        geometric_center: SOBJ carries a ``geometric_center`` vector.
+        gunpoint_parent: GPNT entries are prefixed by a parent submodel index.
+        lightmap_uv: Each face is followed by two lightmap UV-diff floats.
+        timed_anim: ANIM/PANI store a per-submodel key count and start times
+            instead of one global frame count.
+        vertex_alpha: A per-vertex alpha float array follows the normals.
+    """
+
+    geometric_center: bool
+    gunpoint_parent: bool
+    lightmap_uv: bool
+    timed_anim: bool
+    vertex_alpha: bool
+
+
+def features_for(version: int, major_version: int | None = None) -> VersionFeatures:
+    """Return the record-layout features of a POF version.
+
+    Args:
+        version: Full ``major * 100 + minor`` version.
+        major_version: Major version. Defaults to ``version //
+            VERSION_MAJOR_SCALE``. It is a separate argument because
+            :class:`POFModel` stores both and a caller can set them
+            independently; passing it keeps this consistent with whichever
+            value the model actually carries.
+
+    Returns:
+        The feature set for that version.
+
+    Note:
+        The comparisons are not uniform, and that is deliberate rather than an
+        oversight: ``geometric_center`` is *strictly* greater than its
+        threshold, and it and ``gunpoint_parent`` test the full version while
+        the rest test the major version. This mirrors the engine and the
+        layouts these gates have always produced.
+    """
+    if major_version is None:
+        major_version = version // VERSION_MAJOR_SCALE
+    return VersionFeatures(
+        geometric_center=version > VERSION_GEOMETRIC_CENTER,
+        gunpoint_parent=version >= VERSION_GUNPOINT_PARENT,
+        lightmap_uv=major_version >= MAJOR_VERSION_LIGHTMAP,
+        timed_anim=major_version >= MAJOR_VERSION_TIMED_ANIM,
+        vertex_alpha=major_version >= MAJOR_VERSION_VERTEX_ALPHA,
+    )
+
 # Chunk IDs (four-character codes as 32-bit ints, little-endian)
 def _fcc(s: str) -> int:
     """Convert a four-character code to its little-endian 32-bit integer.
@@ -482,6 +539,11 @@ class POFModel:
     ground_planes: list[GunBank] = field(default_factory=list)
     attach_points: list[AttachPoint] = field(default_factory=list)
 
+    @property
+    def features(self) -> VersionFeatures:
+        """Record-layout features implied by this model's version fields."""
+        return features_for(self.version, self.major_version)
+
     def build_hierarchy(self) -> None:
         """Rebuild every submodel's ``children`` list from its ``parent`` index.
 
@@ -748,7 +810,9 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     sm.tree_offset = reader.read_int32()
     sm.data_offset = reader.read_int32()
 
-    if model.version > VERSION_GEOMETRIC_CENTER:
+    features = model.features
+
+    if features.geometric_center:
         sm.geometric_center = reader.read_vector3()
 
     sm.name = reader.read_string()
@@ -771,7 +835,7 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
         sm.vertices[i].normal = reader.read_vector3()
 
     # Alpha per vertex (version >= 23)
-    if model.major_version >= MAJOR_VERSION_VERTEX_ALPHA:
+    if features.vertex_alpha:
         for i in range(n_verts):
             sm.vertices[i].alpha = reader.read_float()
             if sm.vertices[i].alpha < ALPHA_OPAQUE_THRESHOLD:
@@ -798,7 +862,7 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
             face.vertices.append(FaceVertex(index=idx, u=u, v=v))
 
         # Lightmap UV diffs (version >= 21)
-        if model.major_version >= MAJOR_VERSION_LIGHTMAP:
+        if features.lightmap_uv:
             reader.read_float()  # xdiff
             reader.read_float()  # ydiff
 
@@ -915,13 +979,14 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
     model.version = version
     model.major_version = version // VERSION_MAJOR_SCALE
 
-    if model.major_version >= MAJOR_VERSION_LIGHTMAP:
+    features = model.features
+    if features.lightmap_uv:
         model.flags |= PMF_LIGHTMAP_RES
-    if model.major_version >= MAJOR_VERSION_TIMED_ANIM:
+    if features.timed_anim:
         model.flags |= PMF_TIMED
 
     # Read chunks
-    timed = model.major_version >= MAJOR_VERSION_TIMED_ANIM
+    timed = features.timed_anim
 
     while True:
         pos = reader.tell()
@@ -957,7 +1022,7 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             model.gun_banks = []
             for _ in range(n_guns):
                 bank = GunBank()
-                if model.version >= VERSION_GUNPOINT_PARENT:
+                if features.gunpoint_parent:
                     bank.parent = reader.read_int32()
                 bank.point = reader.read_vector3()
                 bank.normal = reader.read_vector3()
@@ -1155,7 +1220,8 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
     writer.write_bytes(POF_MAGIC)
     writer.write_int32(model.version)
 
-    timed = model.major_version >= MAJOR_VERSION_TIMED_ANIM
+    features = model.features
+    timed = features.timed_anim
 
     # OHDR chunk
     ohdr_buf = io.BytesIO()
@@ -1191,7 +1257,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         sobj_w.write_float(sm.radius)
         sobj_w.write_int32(sm.tree_offset)
         sobj_w.write_int32(sm.data_offset)
-        if model.version > VERSION_GEOMETRIC_CENTER:
+        if features.geometric_center:
             sobj_w.write_vector3(sm.geometric_center)
         sobj_w.write_string(sm.name)
         sobj_w.write_string(sm.props)
@@ -1207,7 +1273,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
             sobj_w.write_vector3(v.normal)
 
         # Alpha per vertex (version >= 23)
-        if model.major_version >= MAJOR_VERSION_VERTEX_ALPHA:
+        if features.vertex_alpha:
             for v in sm.vertices:
                 sobj_w.write_float(v.alpha)
 
@@ -1227,7 +1293,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
                 sobj_w.write_float(fv.u)
                 sobj_w.write_float(fv.v)
             # Lightmap UV diffs (version >= 21)
-            if model.major_version >= MAJOR_VERSION_LIGHTMAP:
+            if features.lightmap_uv:
                 sobj_w.write_float(0.0)
                 sobj_w.write_float(0.0)
 
@@ -1240,7 +1306,7 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         gpnt_w = POFWriter(gpnt_buf)
         gpnt_w.write_int32(len(model.gun_banks))
         for bank in model.gun_banks:
-            if model.version >= VERSION_GUNPOINT_PARENT:
+            if features.gunpoint_parent:
                 gpnt_w.write_int32(bank.parent)
             gpnt_w.write_vector3(bank.point)
             gpnt_w.write_vector3(bank.normal)

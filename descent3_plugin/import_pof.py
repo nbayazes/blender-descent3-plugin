@@ -16,9 +16,10 @@ from bpy_extras.io_utils import ImportHelper
 from mathutils import Vector
 
 from . import poformat
+from .config import CONFIG_FILENAME, Config, config_for_path, resolved_search_dirs
 from .constants import (
-    ATTACH_EMPTY_PREFIX,
-    GUN_EMPTY_PREFIX,
+    ATTACH_EMPTY_DISPLAY_SIZE,
+    GUN_EMPTY_DISPLAY_SIZE,
     IMPORT_OT_IDNAME,
     POF_FILENAME_EXT,
     POF_FILTER_GLOB,
@@ -30,6 +31,7 @@ from .constants import (
     PROP_KEY_PROPERTIES,
 )
 from .poformat import AttachPoint, GunBank, ModelFace, POFModel, Submodel
+from .preferences import get_preferences
 from .texutil import clean_texture_dir, find_texture_image
 
 # The log channel is the package, not this module, so console output keeps the
@@ -40,26 +42,12 @@ log = logging.getLogger(__package__)
 # Import-side constants
 # ---------------------------------------------------------------------------
 
-#: Fallback name for a submodel whose SOBJ record has an empty name string.
-SUBMODEL_FALLBACK_PREFIX = "Submodel_"
-
-#: Name of the UV layer created on import. "UVMap" is Blender's own default,
-#: which is what makes the layer the active one for new meshes.
-UV_LAYER_NAME = "UVMap"
-
 #: Blender's default name for the Principled node in a new material node tree.
 PRINCIPLED_BSDF_NODE_NAME = "Principled BSDF"
 
 #: Where the image texture node is placed, left of and above the Principled
 #: BSDF so the link between them is visible without rearranging the tree.
 TEX_NODE_LOCATION = (-400, 300)
-
-#: Viewport size of a gun-point empty. Larger than the attach-point marker so
-#: the two are distinguishable at a glance.
-GUN_EMPTY_DISPLAY_SIZE = 0.3
-
-#: Viewport size of an attach-point empty.
-ATTACH_EMPTY_DISPLAY_SIZE = 0.2
 
 #: A POF face needs at least this many corners to become a Blender polygon.
 #: Degenerate one- and two-vertex faces are dropped.
@@ -158,8 +146,17 @@ def load_pof(
             operator.report({"ERROR"}, f"Failed to parse POF: {e}")
         return {"CANCELLED"}
 
+    config, config_warnings = config_for_path(filepath)
+    for warning in config_warnings:
+        log.warning("%s: %s", config.source_path or CONFIG_FILENAME, warning)
+        if operator:
+            operator.report({"WARNING"}, f"config: {warning}")
+    if config.source_path:
+        print(f"{CONSOLE_PREFIX} settings from {config.source_path}")
+
+    prefs = get_preferences(context)
     model_dir = os.path.dirname(os.path.abspath(filepath))
-    search_dirs = _texture_search_dirs(model_dir, operator)
+    search_dirs = _texture_search_dirs(model_dir, operator, config, prefs)
 
     # name -> True if a matching image file was found on disk
     tex_report: dict[str, bool] = {}
@@ -184,7 +181,8 @@ def load_pof(
         log.info("Importing submodel %d: '%s' (verts=%d, faces=%d, parent=%d)",
                  sm.index, sm.name, len(sm.vertices), len(sm.faces), sm.parent)
         obj = _import_submodel(
-            context, model, sm, collection, search_dirs, tex_report, material_cache
+            context, model, sm, collection, search_dirs, tex_report,
+            material_cache, config,
         )
         if obj:
             obj_by_index[sm.index] = obj
@@ -203,9 +201,9 @@ def load_pof(
         log.info("Importing %d gun points", len(model.gun_banks))
         _import_points(
             model.gun_banks,
-            GUN_EMPTY_PREFIX,
+            config.naming.gun_prefix,
             "SINGLE_ARROW",
-            GUN_EMPTY_DISPLAY_SIZE,
+            _marker_size(prefs, "gun_marker_size", GUN_EMPTY_DISPLAY_SIZE),
             collection,
             obj_by_index,
         )
@@ -214,9 +212,9 @@ def load_pof(
         log.info("Importing %d attach points", len(model.attach_points))
         _import_points(
             model.attach_points,
-            ATTACH_EMPTY_PREFIX,
+            config.naming.attach_prefix,
             "PLAIN_AXES",
-            ATTACH_EMPTY_DISPLAY_SIZE,
+            _marker_size(prefs, "attach_marker_size", ATTACH_EMPTY_DISPLAY_SIZE),
             collection,
             obj_by_index,
         )
@@ -227,18 +225,42 @@ def load_pof(
     return {"FINISHED"}
 
 
+def _marker_size(prefs, attribute: str, default: float) -> float:
+    """Return a marker size from preferences, or ``default`` without them.
+
+    Args:
+        prefs: Add-on preferences, or ``None`` when the add-on is not
+            registered (the headless scripts call the importer directly).
+        attribute: Preference property to read.
+        default: Value to use when preferences are unavailable.
+
+    Returns:
+        The configured size, or ``default``.
+    """
+    if prefs is None:
+        return default
+    return float(getattr(prefs, attribute, default))
+
+
 def _texture_search_dirs(
-    model_dir: str, operator: ImportPOF | None
+    model_dir: str,
+    operator: ImportPOF | None,
+    config: Config,
+    prefs=None,
 ) -> list[str]:
     """Build the ordered list of directories to search for texture images.
 
     Args:
         model_dir: Folder the model itself lives in.
         operator: Operator carrying the optional ``texture_dir`` override.
+        config: Project configuration supplying extra search directories.
+        prefs: Add-on preferences supplying the user's personal texture
+            library, or ``None`` when the add-on is not registered.
 
     Returns:
-        Directories in search order. An explicit texture directory, if given and
-        real, takes priority over the model's own folder.
+        Directories in search order, most specific first: the dialog's Texture
+        Folder, the project's configured directories, the model's own folder,
+        and finally the user's texture library as a catch-all.
     """
     search_dirs: list[str] = []
     if operator is not None:
@@ -251,8 +273,24 @@ def _texture_search_dirs(
                 search_dirs.append(tex_dir)
             else:
                 log.warning("Texture Folder does not exist: %s", tex_dir)
+    for configured in resolved_search_dirs(config):
+        if configured in search_dirs:
+            continue
+        if os.path.isdir(configured):
+            search_dirs.append(configured)
+        else:
+            log.warning("Configured texture directory does not exist: %s",
+                        configured)
     if model_dir not in search_dirs:
         search_dirs.append(model_dir)
+
+    library = clean_texture_dir(getattr(prefs, "texture_library", "") or "")
+    if library:
+        library = os.path.normpath(os.path.abspath(bpy.path.abspath(library)))
+        if not os.path.isdir(library):
+            log.warning("Texture Library does not exist: %s", library)
+        elif library not in search_dirs:
+            search_dirs.append(library)
     return search_dirs
 
 
@@ -362,6 +400,7 @@ def _get_or_create_material(
     search_dirs: list[str],
     tex_report: dict[str, bool],
     material_cache: dict[str, bpy.types.Material],
+    config: Config,
 ) -> bpy.types.Material:
     """Return a material for a texture name, creating it at most once.
 
@@ -374,6 +413,7 @@ def _get_or_create_material(
             not downgraded to "missing" by a later lookup.
         material_cache: Texture name to material, so submodels sharing a texture
             reuse one material rather than creating a duplicate each.
+        config: Project configuration supplying the image extension order.
 
     Returns:
         The material for ``name``. A material is still returned when no image is
@@ -390,7 +430,9 @@ def _get_or_create_material(
     if bsdf is None:
         bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
 
-    image_path = find_texture_image(name, search_dirs)
+    image_path = find_texture_image(
+        name, search_dirs, config.textures.extensions
+    )
     tex_report[name] = tex_report.get(name, False) or bool(image_path)
     if image_path:
         try:
@@ -420,6 +462,7 @@ def _import_submodel(
     search_dirs: list[str],
     tex_report: dict[str, bool],
     material_cache: dict[str, bpy.types.Material],
+    config: Config,
 ) -> bpy.types.Object | None:
     """Import a single submodel as a Blender mesh object.
 
@@ -432,20 +475,21 @@ def _import_submodel(
         search_dirs: Directories to search for texture images.
         tex_report: Texture name to whether an image was found; updated here.
         material_cache: Shared texture-name to material cache.
+        config: Project configuration supplying naming conventions.
 
     Returns:
         The new object. A submodel with no geometry becomes an empty rather than
         an empty mesh, so it can still act as a parent in the hierarchy.
     """
+    fallback_name = f"{config.naming.submodel_fallback_prefix}{sm.index}"
+
     if not sm.vertices:
-        obj = bpy.data.objects.new(
-            sm.name or f"{SUBMODEL_FALLBACK_PREFIX}{sm.index}", None
-        )
+        obj = bpy.data.objects.new(sm.name or fallback_name, None)
         obj.location = Vector((sm.offset.x, sm.offset.y, sm.offset.z))
         collection.objects.link(obj)
         return obj
 
-    mesh = bpy.data.meshes.new(sm.name or f"{SUBMODEL_FALLBACK_PREFIX}{sm.index}")
+    mesh = bpy.data.meshes.new(sm.name or fallback_name)
 
     verts = [Vector((v.position.x, v.position.y, v.position.z)) for v in sm.vertices]
 
@@ -460,7 +504,7 @@ def _import_submodel(
 
     # Set UVs (mesh.polygons is 1:1 with kept_faces, in order)
     if kept_faces:
-        uv_layer = mesh.uv_layers.new(name=UV_LAYER_NAME)
+        uv_layer = mesh.uv_layers.new(name=config.naming.uv_layer)
         for poly, pof_face in zip(mesh.polygons, kept_faces):
             for loop_idx, fv in zip(poly.loop_indices, pof_face.vertices):
                 if loop_idx < len(uv_layer.data):
@@ -484,14 +528,13 @@ def _import_submodel(
                 "using Blender's computed normals", sm.name, e
             )
 
-    obj = bpy.data.objects.new(
-        sm.name or f"{SUBMODEL_FALLBACK_PREFIX}{sm.index}", mesh
-    )
+    obj = bpy.data.objects.new(sm.name or fallback_name, mesh)
     obj.location = Vector((sm.offset.x, sm.offset.y, sm.offset.z))
     collection.objects.link(obj)
 
     _assign_materials(
-        obj, mesh, model, kept_faces, search_dirs, tex_report, material_cache
+        obj, mesh, model, kept_faces, search_dirs, tex_report, material_cache,
+        config,
     )
 
     # Store POF-specific properties as custom properties
@@ -514,6 +557,7 @@ def _assign_materials(
     search_dirs: list[str],
     tex_report: dict[str, bool],
     material_cache: dict[str, bpy.types.Material],
+    config: Config,
 ) -> None:
     """Build one material slot per texture used by this submodel's faces.
 
@@ -525,6 +569,7 @@ def _assign_materials(
         search_dirs: Directories to search for texture images.
         tex_report: Texture name to whether an image was found; updated here.
         material_cache: Shared texture-name to material cache.
+        config: Project configuration supplying the image extension order.
     """
     tex_set = {
         f.texnum for f in kept_faces
@@ -536,7 +581,7 @@ def _assign_materials(
         tex_name = model.textures[tex_idx]
         if tex_name not in name_to_slot:
             mat = _get_or_create_material(
-                tex_name, search_dirs, tex_report, material_cache
+                tex_name, search_dirs, tex_report, material_cache, config
             )
             obj.data.materials.append(mat)
             name_to_slot[tex_name] = len(obj.data.materials) - 1
