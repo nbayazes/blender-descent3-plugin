@@ -36,9 +36,14 @@ from .texutil import IMAGE_EXTENSIONS
 
 log = logging.getLogger(__package__)
 
-try:  # Python 3.11+, which covers every Blender this add-on supports.
+# A capability probe, not a swallowed error: tomllib is stdlib from Python
+# 3.11, which covers every Blender this add-on supports, so this is belt and
+# braces. Nothing is logged here because the package is still being imported
+# and register() has not configured logging yet -- load_config() checks for the
+# None and returns a warning the operator shows the user.
+try:
     import tomllib
-except ImportError:  # pragma: no cover - defensive, not reachable on 4.2+
+except ImportError:  # pragma: no cover - not reachable on Blender 4.2+
     tomllib = None
 
 #: File the add-on looks for, walking up from the model being imported or

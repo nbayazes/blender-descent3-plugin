@@ -135,6 +135,7 @@ def load_pof(
             data = f.read()
         log.info("Read %d bytes", len(data))
     except Exception as e:
+        log.error("Failed to read %s: %s", filepath, e)
         if operator:
             operator.report({"ERROR"}, f"Failed to read file: {e}")
         return {"CANCELLED"}
@@ -142,6 +143,7 @@ def load_pof(
     try:
         model = poformat.parse_pof(data)
     except Exception as e:
+        log.error("Failed to parse %s: %s", filepath, e)
         if operator:
             operator.report({"ERROR"}, f"Failed to parse POF: {e}")
         return {"CANCELLED"}

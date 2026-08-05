@@ -157,6 +157,8 @@ def save_pof(
         objects = [obj for obj in bpy.data.objects if obj.type == "MESH"]
 
     if not objects:
+        log.warning("Nothing to export: no mesh objects%s",
+                    " selected" if operator and operator.export_selected else "")
         if operator:
             operator.report({"WARNING"}, "No mesh objects to export")
         return {"CANCELLED"}
@@ -168,6 +170,7 @@ def save_pof(
         with open(filepath, "wb") as f:
             f.write(data)
     except Exception as e:
+        log.error("Failed to write %s: %s", filepath, e)
         if operator:
             operator.report({"ERROR"}, f"Failed to write POF: {e}")
         return {"CANCELLED"}

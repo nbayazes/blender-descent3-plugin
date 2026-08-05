@@ -3,6 +3,7 @@ Unit tests for the POF binary parser and writer.
 Run with: python -m pytest tests/test_poformat.py -v
 """
 
+import io
 import os
 import struct
 
@@ -369,3 +370,66 @@ class TestEdgeCases:
         reparsed = parse_pof(data)
         assert len(reparsed.attach_points) == 1
         assert reparsed.attach_points[0].point.x == pytest.approx(1.0)
+
+
+class TestTruncatedTail:
+    """A file cut short mid-chunk-header must say so.
+
+    Chunk reading ends on EOFError, which is also how a well-formed file
+    finishes, so a truncated tail used to be indistinguishable from a clean
+    end: the model silently lost whatever the cut-off chunks held.
+    """
+
+    @staticmethod
+    def _valid_bytes():
+        model = POFModel(version=OBJFILE_VERSION, major_version=23)
+        model.textures = ["Hull"]
+        sm = Submodel(index=0, parent=-1, name="Root")
+        sm.vertices.append(SubmodelVertex(position=Vector3(1.0, 2.0, 3.0)))
+        model.submodels.append(sm)
+        return write_pof(model)
+
+    def test_clean_file_warns_nothing(self, caplog):
+        data = self._valid_bytes()
+        with caplog.at_level("WARNING"):
+            parse_pof(data)
+        assert "trailing" not in caplog.text
+
+    @pytest.mark.parametrize("extra", [1, 3, 7])
+    def test_truncated_header_warns(self, caplog, extra):
+        """1-7 leftover bytes cannot be a chunk header (which needs 8)."""
+        data = self._valid_bytes() + b"\x00" * extra
+        with caplog.at_level("WARNING"):
+            model = parse_pof(data)
+        assert "truncated" in caplog.text.lower()
+        assert f"{extra} trailing byte" in caplog.text
+        # Still returns what it managed to read, rather than raising.
+        assert len(model.submodels) == 1
+
+    def test_truncation_does_not_lose_earlier_chunks(self, caplog):
+        data = self._valid_bytes() + b"\x01\x02\x03"
+        with caplog.at_level("WARNING"):
+            model = parse_pof(data)
+        assert model.textures == ["Hull"]
+        assert model.submodels[0].name == "Root"
+
+
+class TestBytesRemaining:
+    def test_counts_from_the_current_position(self):
+        reader = POFReader(io.BytesIO(b"0123456789"))
+        assert reader.bytes_remaining() == 10
+        reader.read_bytes(4)
+        assert reader.bytes_remaining() == 6
+
+    def test_restores_the_position(self):
+        reader = POFReader(io.BytesIO(b"0123456789"))
+        reader.read_bytes(4)
+        before = reader.tell()
+        reader.bytes_remaining()
+        assert reader.tell() == before
+        assert reader.read_bytes(2) == b"45"
+
+    def test_zero_at_end(self):
+        reader = POFReader(io.BytesIO(b"abc"))
+        reader.read_bytes(3)
+        assert reader.bytes_remaining() == 0

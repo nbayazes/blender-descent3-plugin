@@ -13,10 +13,14 @@ Edit > Preferences > Add-ons -- which is why they are the right home for
 anything a user is expected to change.
 """
 
+import logging
+
 import bpy
 from bpy.props import FloatProperty, StringProperty
 
 from .constants import ATTACH_EMPTY_DISPLAY_SIZE, GUN_EMPTY_DISPLAY_SIZE
+
+log = logging.getLogger(__package__)
 
 
 class Descent3Preferences(bpy.types.AddonPreferences):
@@ -87,7 +91,11 @@ def get_preferences(context: bpy.types.Context) -> Descent3Preferences | None:
     """
     try:
         addon = context.preferences.addons[__package__]
-    except (AttributeError, KeyError):
+    except (AttributeError, KeyError) as e:
+        # Expected whenever the conversion functions are driven directly rather
+        # than through the operators, which is how the headless scripts run --
+        # so this is debug, not a warning. Callers fall back to the defaults.
+        log.debug("Add-on preferences unavailable (%s); using defaults", e)
         return None
     return getattr(addon, "preferences", None)
 

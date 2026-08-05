@@ -683,6 +683,18 @@ class POFReader:
         """Move to absolute stream position ``pos``."""
         self.stream.seek(pos)
 
+    def bytes_remaining(self) -> int:
+        """Return how many bytes follow the current position.
+
+        Returns:
+            The byte count between here and the end of the stream. The position
+            is restored, so this is safe to call mid-parse.
+        """
+        here = self.tell()
+        end = self.stream.seek(0, io.SEEK_END)
+        self.seek(here)
+        return end - here
+
 # ---------------------------------------------------------------------------
 # Binary Writer
 # ---------------------------------------------------------------------------
@@ -993,6 +1005,18 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         try:
             chunk_id, chunk_len = reader.read_chunk_header()
         except EOFError:
+            # Running out of chunks is how a well-formed file ends, so this is
+            # the normal exit. A clean end lands exactly on a chunk boundary,
+            # though -- leftover bytes mean a header was cut in half, and the
+            # model is silently missing whatever those chunks held.
+            reader.seek(pos)
+            trailing = reader.bytes_remaining()
+            if trailing:
+                log.warning(
+                    "File ends mid-chunk-header: %d trailing byte(s) after the "
+                    "last complete chunk. The file is truncated and anything "
+                    "past this point was not read.", trailing,
+                )
             break
 
         chunk_start = reader.tell()

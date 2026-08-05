@@ -26,6 +26,8 @@ import importlib
 import logging
 import sys
 
+log = logging.getLogger(__name__)
+
 # constants is bpy-free by contract, so importing it here does not drag Blender
 # in. Everything bpy-touching stays behind _submodules().
 from . import constants
@@ -104,7 +106,13 @@ def _remove_menu_entries() -> None:
         try:
             menu.remove(func)
         except ValueError:
-            pass
+            # Not fatal -- the entry is gone either way, which is the goal. It
+            # does mean something else removed it, so say so rather than let a
+            # disappearing menu entry go unexplained.
+            log.warning(
+                "%s was not in %s; it had already been removed",
+                func.__name__, menu.__name__,
+            )
 
 
 def register():
@@ -142,7 +150,9 @@ def unregister():
         cls = _registered.pop()
         try:
             bpy.utils.unregister_class(cls)
-        except RuntimeError:
-            # Already unregistered -- Blender drops the previous class when a
-            # reloaded one claims the same bl_idname. Nothing left to undo.
-            pass
+        except RuntimeError as e:
+            # Not fatal: the class is gone, which is what unregistering wanted.
+            # Blender drops the previous class when a reloaded one claims the
+            # same bl_idname, so this is expected after an add-on reload -- but
+            # it also fires if registration half-failed, so it is worth saying.
+            log.warning("Could not unregister %s: %s", cls.__name__, e)
