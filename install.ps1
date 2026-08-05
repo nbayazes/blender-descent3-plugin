@@ -74,6 +74,12 @@ $RequiredFiles = @(
     'texutil.py'
 )
 
+# Non-.py files that must also be installed. blender_manifest.toml is the
+# canonical version and is what Blender 4.2+ reads to treat the folder as an
+# extension; the previous manifest sat in the repo unshipped because the copy
+# step filtered on '*.py' only.
+$DataFiles = @('blender_manifest.toml')
+
 # Package folder names this add-on used to ship under. They declare the same
 # operator bl_idnames, so leaving one in place next to the new folder gives the
 # user two File > Import entries and lets Blender pick either one.
@@ -105,14 +111,16 @@ function Get-SourceDir {
     return (Resolve-Path -LiteralPath $src).Path
 }
 
+# blender_manifest.toml is the single source of truth for the version;
+# bl_info carries a literal copy only because Blender ast-parses it, and a
+# test fails the build if the two drift apart.
 function Get-AddonVersion {
     param([string]$SourceDir)
 
-    $initPath = Join-Path $SourceDir '__init__.py'
-    $match = [regex]::Match((Get-Content -LiteralPath $initPath -Raw), '"version"\s*:\s*\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)')
-    if ($match.Success) {
-        return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($match.Groups[3].Value)"
-    }
+    $manifestPath = Join-Path $SourceDir 'blender_manifest.toml'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return 'unknown' }
+    $match = [regex]::Match((Get-Content -LiteralPath $manifestPath -Raw), '(?m)^\s*version\s*=\s*"([^"]+)"')
+    if ($match.Success) { return $match.Groups[1].Value }
     return 'unknown'
 }
 
@@ -359,8 +367,13 @@ function Install-Addon {
         }
     }
 
-    $sourceFiles = Get-ChildItem -LiteralPath $SourceDir -Filter '*.py' -File |
-        Sort-Object Name
+    $sourceFiles = @(
+        Get-ChildItem -LiteralPath $SourceDir -Filter '*.py' -File
+        foreach ($data in $DataFiles) {
+            $dataPath = Join-Path $SourceDir $data
+            if (Test-Path -LiteralPath $dataPath -PathType Leaf) { Get-Item -LiteralPath $dataPath }
+        }
+    ) | Sort-Object Name
 
     if ($DryRun) {
         Write-Note "would create $destination"

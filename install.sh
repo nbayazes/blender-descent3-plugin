@@ -30,6 +30,11 @@ set -u
 
 ADDON_ID="descent3_plugin"
 REQUIRED_FILES="__init__.py config.py constants.py export_pof.py import_pof.py mathutil.py poformat.py preferences.py texutil.py"
+# Non-.py files that must also be installed. blender_manifest.toml is the
+# canonical version and is what Blender 4.2+ reads to treat the folder as an
+# extension; the previous manifest sat in the repo unshipped because the copy
+# step globbed '*.py' only.
+DATA_FILES="blender_manifest.toml"
 # Package folder names this add-on used to ship under. They declare the same
 # operator bl_idnames, so leaving one in place next to the new folder gives the
 # user two File > Import entries and lets Blender pick either one.
@@ -128,9 +133,12 @@ check_source() {
     done
 }
 
+# blender_manifest.toml is the single source of truth for the version;
+# bl_info carries a literal copy only because Blender ast-parses it, and a
+# test fails the build if the two drift apart.
 addon_version() {
-    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*(\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)[[:space:]]*,[[:space:]]*\([0-9]*\)).*/\1.\2.\3/p' \
-        "$SOURCE_DIR/__init__.py" | head -1
+    sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$SOURCE_DIR/blender_manifest.toml" | head -1
 }
 
 # -------------------------------------------------------------- steam discovery
@@ -422,6 +430,9 @@ install_addon() {
         for f in "$SOURCE_DIR"/*.py; do
             [ -f "$f" ] && note "would copy $(basename "$f")"
         done
+        for f in $DATA_FILES; do
+            [ -f "$SOURCE_DIR/$f" ] && note "would copy $f"
+        done
         return 0
     fi
 
@@ -438,6 +449,14 @@ install_addon() {
             return 1
         fi
         copied="$copied $(basename "$f")"
+    done
+    for f in $DATA_FILES; do
+        [ -f "$SOURCE_DIR/$f" ] || continue
+        if ! cp -f "$SOURCE_DIR/$f" "$dest/"; then
+            fail "could not copy $f to $dest"
+            return 1
+        fi
+        copied="$copied $f"
     done
     ok "copied:$copied"
 

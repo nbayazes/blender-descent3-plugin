@@ -92,7 +92,8 @@ installed as a folder:
 ```
 scripts/addons/descent3_plugin/{__init__.py, config.py, constants.py,
                                export_pof.py, import_pof.py, mathutil.py,
-                               poformat.py, preferences.py, texutil.py}
+                               poformat.py, preferences.py, texutil.py,
+                               blender_manifest.toml}
 ```
 
 If the `.py` files are dropped **loose** into `scripts/addons/` instead, Blender
@@ -100,9 +101,10 @@ can't load the package: the operator never registers and Blender warns
 `add-on missing 'bl_info'` about `poformat.py`. This exact mistake caused the
 "models import without textures" bug — the fixed code simply wasn't running.
 
-Copy **all** the `.py` files and clear `__pycache__`; deploying only some (e.g.
-forgetting `texutil.py` or `constants.py`) makes the add-on fail to import.
-`install.ps1` / `install.sh` copy and verify the whole set, so prefer them. A running Blender
+Copy **all** the `.py` files plus `blender_manifest.toml`, and clear
+`__pycache__`; deploying only some (e.g. forgetting `texutil.py` or
+`constants.py`) makes the add-on fail to import. `install.ps1` / `install.sh`
+copy and verify the whole set, so prefer them. A running Blender
 session loads the add-on once, so after redeploying, restart Blender or toggle
 the add-on off/on in Preferences.
 

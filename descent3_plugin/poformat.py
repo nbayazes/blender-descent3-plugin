@@ -1,9 +1,9 @@
 """Descent 3 POF/OOF binary format parser and writer.
 
 Parses and writes Descent 3 polygon model files. Based on the Descent 3 source
-code and Inferno engine reference implementation, which are vendored at the
-repository root as ``polymodel.cpp``, ``polymodel.h`` and
-``polymodel_external.h``; comments here cite them by symbol name.
+code and Inferno engine reference implementation, vendored under ``reference/``
+as ``polymodel.cpp``, ``polymodel.h`` and ``polymodel_external.h``; the
+file:line citations throughout this module are relative to that folder.
 
 File format::
 

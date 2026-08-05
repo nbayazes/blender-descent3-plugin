@@ -17,6 +17,7 @@ keyframes.
 > ```
 > scripts/addons/descent3_plugin/
 >   ├── __init__.py
+>   ├── blender_manifest.toml
 >   ├── config.py
 >   ├── constants.py
 >   ├── export_pof.py
@@ -274,6 +275,25 @@ python -m pytest -q
 `tests/test_package_import.py` guards that contract: it fails if a
 module-scope `import bpy` reappears in any of those modules.
 
+### Versioning
+
+`descent3_plugin/blender_manifest.toml` is the canonical version. Both
+installers read it from there, and `blender --command extension validate
+descent3_plugin` checks the manifest itself.
+
+`bl_info` in `__init__.py` still carries a literal copy, and has to:
+`addon_utils.modules()` pulls `bl_info` out of the file text with
+`ast.literal_eval` *without importing the module*, so computing the version
+at import time makes the add-on disappear from Edit → Preferences → Add-ons
+entirely. `tests/test_manifest.py` fails if the two ever disagree, so the
+duplication cannot silently drift.
+
+## Licence
+
+GPL-3.0-or-later — see `LICENSE`. The add-on redistributes the Descent 3
+engine sources under `reference/`, which are GPL-3.0-or-later, © 2024
+Parallax Software.
+
 Test assets:
 
 - `tests/mock_data/` — hand-written `.pof` files for parser tests
@@ -286,6 +306,35 @@ Anything that touches Blender (materials, images, mesh building, operator
 registration) is verified by running Blender headless against a real model; see
 the `.claude/skills/blender-addon-testing` skill for the workflow, and
 `.claude/skills/oof-pof-format` for the binary format reference.
+
+## Design notes
+
+Decisions that are not obvious from the code, and the reasoning behind them.
+
+- **Pure-Python parser/writer.** No C extension: Blender ships `struct`, and
+  keeping `poformat.py` free of `bpy` is what lets the whole format layer be
+  unit-tested outside Blender.
+- **No coordinate conversion.** Descent 3 and Blender are both Z-up
+  right-handed, so vertex positions pass through unchanged. UVs are the one
+  exception: Descent puts the origin at the top-left and Blender at the
+  bottom-left, so import negates V and export negates it back.
+- **1:1 scale.** Descent units are roughly metres and are imported unscaled.
+- **Dataclass model.** Parsing produces a plain `POFModel` tree with no Blender
+  types in it, so the binary layer and the scene-building layer can be changed
+  and tested independently.
+- **Hierarchy becomes parenting.** The submodel tree maps onto Blender object
+  parenting; submodels are keyed by their own index rather than list position,
+  because SOBJ chunks can arrive out of order or with gaps.
+- **Custom properties carry what Blender cannot represent.** Submodel flags,
+  movement type and axis, and the raw property string are stored on the object
+  so a round trip does not lose commands the add-on does not itself interpret.
+- **Round-trip fidelity is the correctness bar.** Import then export should
+  produce an equivalent file. This is enforced by
+  `tests/test_version_features.py`, which round-trips a model at every version
+  where the record layout changes.
+- **Gun and attach points are empties matched by name prefix.** That makes the
+  prefix a contract between import and export, which is why it is configurable
+  in one place both halves read (see Settings).
 
 ## Repository layout
 
@@ -300,7 +349,9 @@ descent3_plugin/      the add-on (install this folder)
   mathutil.py           Vector3 and math helpers (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
+descent3_plugin/blender_manifest.toml   canonical version + extension metadata
 descent3.example.toml   documented template for a project config
+LICENSE                 GPL-3.0-or-later
 tests/                  pytest suite, mock data, and fixtures
-polymodel.{cpp,h}       Descent 3 source reference for the format
+reference/              vendored Descent 3 engine sources (GPL-3, not installed)
 ```
