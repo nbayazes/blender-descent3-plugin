@@ -69,6 +69,7 @@ $RequiredFiles = @(
     'export_pof.py',
     'import_pof.py',
     'mathutil.py',
+    'naming.py',
     'poformat.py',
     'preferences.py',
     'texutil.py'

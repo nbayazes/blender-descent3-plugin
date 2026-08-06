@@ -5,7 +5,7 @@
 what lets the rest of this suite say ``from descent3_plugin.poformat import
 ...`` instead of manipulating ``sys.path``. If someone adds a module-scope
 ``import bpy`` back to ``__init__.py``, or to any of ``config``,
-``constants``, ``mathutil``, ``poformat`` or ``texutil``, collection of every other test file
+``constants``, ``mathutil``, ``naming``, ``poformat`` or ``texutil``, collection of every other test file
 breaks -- so these tests fail loudly and point at the cause.
 
 Each check runs in a subprocess: by the time this module executes, the other
@@ -29,6 +29,7 @@ BPY_FREE_MODULES = [
     "descent3_plugin.config",
     "descent3_plugin.constants",
     "descent3_plugin.mathutil",
+    "descent3_plugin.naming",
     "descent3_plugin.poformat",
     "descent3_plugin.texutil",
 ]

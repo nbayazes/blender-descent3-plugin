@@ -426,7 +426,23 @@ def _get_or_create_material(
     if cached is not None:
         return cached
 
+    existing = _find_material(name)
+    if existing is not None:
+        _adopt_material(existing, name, search_dirs, tex_report, config)
+        material_cache[name] = existing
+        return existing
+
     mat = bpy.data.materials.new(name=name)
+    # Blender uniquifies datablock names, so a clash here would have produced
+    # "<name>.001" -- which export would then write to the file as a texture ID
+    # matching nothing on disk. The lookup above is what prevents that, so if it
+    # still happens something is wrong and the round trip is already broken.
+    if mat.name != name:
+        log.error(
+            "Material '%s' was created as '%s'; export would write the wrong "
+            "texture ID. An existing material of that name should have been "
+            "reused instead.", name, mat.name,
+        )
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get(PRINCIPLED_BSDF_NODE_NAME)
     if bsdf is None:
@@ -437,23 +453,182 @@ def _get_or_create_material(
     )
     tex_report[name] = tex_report.get(name, False) or bool(image_path)
     if image_path:
-        try:
-            img = bpy.data.images.load(image_path, check_existing=True)
-            log.info("Loaded image '%s' (%dx%d) for material '%s'",
-                     img.name, img.size[0], img.size[1], name)
-            tex_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            tex_node.image = img
-            tex_node.location = TEX_NODE_LOCATION
-            mat.node_tree.links.new(
-                tex_node.outputs["Color"], bsdf.inputs["Base Color"]
-            )
-        except Exception as e:
-            log.error("Failed to load image '%s': %s", image_path, e)
+        _attach_image(mat, bsdf, image_path, name)
     else:
         log.info("No image found for texture '%s'; using blank material", name)
 
     material_cache[name] = mat
     return mat
+
+
+def _find_material(name: str) -> bpy.types.Material | None:
+    """Return the scene's material for a texture name, preferring a local one.
+
+    Material names are namespaced per library, so a local ``Hull`` and a linked
+    ``Hull`` can coexist. A plain ``bpy.data.materials.get(name)`` returns
+    whichever comes first in the list, which is an ordering accident rather than
+    a rule; asking for the local one explicitly makes the choice deliberate.
+
+    A linked material is still reused when it is the only candidate: someone
+    linking a shared material library is exactly the "the right one already
+    exists" case this reuse is for, and a linked material assigns to a local
+    mesh perfectly well even though it is not editable.
+
+    Args:
+        name: Texture name, which is also the material name.
+
+    Returns:
+        The local material of that name, else a linked one, else ``None``.
+    """
+    local = bpy.data.materials.get((name, None))
+    if local is not None:
+        return local
+    return bpy.data.materials.get(name)
+
+
+def _find_principled(mat: bpy.types.Material) -> bpy.types.Node | None:
+    """Return the material's Principled BSDF node, or None.
+
+    Looks up Blender's default node name first, then falls back to searching by
+    type, because a material the user authored may well have renamed it.
+
+    Args:
+        mat: Material to search.
+
+    Returns:
+        The node, or ``None`` if the material has no Principled BSDF.
+    """
+    if not mat.use_nodes or mat.node_tree is None:
+        return None
+    node = mat.node_tree.nodes.get(PRINCIPLED_BSDF_NODE_NAME)
+    if node is not None and node.type == "BSDF_PRINCIPLED":
+        return node
+    for node in mat.node_tree.nodes:
+        if node.type == "BSDF_PRINCIPLED":
+            return node
+    return None
+
+
+def _has_image(mat: bpy.types.Material) -> bool:
+    """Return whether the material already has an image texture node with an image.
+
+    Args:
+        mat: Material to inspect.
+
+    Returns:
+        True if any image texture node has an image assigned.
+    """
+    if not mat.use_nodes or mat.node_tree is None:
+        return False
+    return any(
+        node.type == "TEX_IMAGE" and node.image is not None
+        for node in mat.node_tree.nodes
+    )
+
+
+def _attach_image(
+    mat: bpy.types.Material,
+    bsdf: bpy.types.Node,
+    image_path: str,
+    name: str,
+) -> None:
+    """Load ``image_path`` and wire it into the material's base colour.
+
+    Base Color takes a single link, so connecting to a socket that already has
+    one silently replaces it. The image node is still added when that happens,
+    leaving the texture available in the tree, but the user's existing
+    connection is left driving the surface.
+
+    Args:
+        mat: Material to add the texture node to.
+        bsdf: Principled BSDF whose Base Color input receives the texture.
+        image_path: Path of the image file to load.
+        name: Texture name, for logging.
+    """
+    try:
+        img = bpy.data.images.load(image_path, check_existing=True)
+        log.info("Loaded image '%s' (%dx%d) for material '%s'",
+                 img.name, img.size[0], img.size[1], name)
+        tex_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+        tex_node.image = img
+        tex_node.location = TEX_NODE_LOCATION
+        base_color = bsdf.inputs["Base Color"]
+        if base_color.is_linked:
+            log.warning(
+                "Material '%s' already drives Base Color from another node, so "
+                "'%s' was added to the node tree but left unconnected rather "
+                "than replacing that link.", name, os.path.basename(image_path),
+            )
+            return
+        mat.node_tree.links.new(tex_node.outputs["Color"], base_color)
+    except Exception as e:
+        log.error("Failed to load image '%s': %s", image_path, e)
+
+
+def _adopt_material(
+    mat: bpy.types.Material,
+    name: str,
+    search_dirs: list[str],
+    tex_report: dict[str, bool],
+    config: Config,
+) -> None:
+    """Reuse a material that already exists in the scene under this texture name.
+
+    Reusing rather than creating is what keeps exactly one material per texture
+    ID. The material may come from an earlier import or from the user; either
+    way its name *is* the texture ID, so it is the right material for these
+    faces. Creating a second one would make Blender name it ``<name>.001``, and
+    export would write that to the file as a texture that does not exist.
+
+    An adopted material carrying no image gets one attached, which modifies a
+    datablock this import did not create -- so that is warned about rather than
+    done quietly.
+
+    Args:
+        mat: The existing material.
+        name: Texture name it stands for.
+        search_dirs: Directories to search for the image.
+        tex_report: Texture name to whether the texture resolved; updated here.
+        config: Project configuration supplying the image extension order.
+    """
+    if _has_image(mat):
+        log.info("Reusing existing material '%s' (already textured)", name)
+        tex_report[name] = True
+        return
+
+    image_path = find_texture_image(
+        name, search_dirs, config.textures.extensions
+    )
+    tex_report[name] = tex_report.get(name, False) or bool(image_path)
+    if not image_path:
+        log.info(
+            "Reusing existing material '%s'; no image found for it either", name
+        )
+        return
+
+    if not mat.use_nodes:
+        log.warning(
+            "Existing material '%s' did not use nodes; enabling them so the "
+            "texture can be attached. This modifies a material that this "
+            "import did not create.", name,
+        )
+        mat.use_nodes = True
+
+    bsdf = _find_principled(mat)
+    if bsdf is None:
+        log.warning(
+            "Existing material '%s' has no Principled BSDF, so '%s' was not "
+            "attached. The material is reused unmodified.",
+            name, os.path.basename(image_path),
+        )
+        return
+
+    log.warning(
+        "Existing material '%s' had no image texture; attaching '%s'. This "
+        "modifies a material that this import did not create.",
+        name, os.path.basename(image_path),
+    )
+    _attach_image(mat, bsdf, image_path, name)
 
 
 def _import_submodel(

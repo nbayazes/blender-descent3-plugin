@@ -15,6 +15,7 @@ from bpy_extras.io_utils import ExportHelper
 from . import poformat
 from .config import CONFIG_FILENAME, Config, config_for_path
 from .mathutil import Vector3
+from .naming import resolve_texture_names
 from .constants import (
     EXPORT_OT_IDNAME,
     POF_FILENAME_EXT,
@@ -219,7 +220,7 @@ def _build_pof_model(
     # resolved by name before every submodel has been built.
     obj_to_index = {obj.name: i for i, obj in enumerate(objects)}
 
-    model.textures = _collect_textures(objects)
+    model.textures, material_textures = _collect_textures(objects)
     tex_index = {name: i for i, name in enumerate(model.textures)}
 
     min_bound = Vector3(BOUNDS_INIT, BOUNDS_INIT, BOUNDS_INIT)
@@ -228,7 +229,9 @@ def _build_pof_model(
     for obj in objects:
         if obj.type != "MESH":
             continue
-        sm = _build_submodel(obj, obj_to_index, tex_index, min_bound, max_bound)
+        sm = _build_submodel(
+            obj, obj_to_index, tex_index, material_textures, min_bound, max_bound
+        )
         model.submodels.append(sm)
 
     model.min_bound = min_bound
@@ -291,27 +294,44 @@ def _collect_textures(objects: list[bpy.types.Object]) -> list[str]:
     Material names are the texture names: import names each material after the
     texture it came from, so export can map back without extra bookkeeping.
 
+    Blender's ``.NNN`` duplicate suffix is stripped first. Import reuses an
+    existing material rather than letting Blender mint ``Hull.001``, but a scene
+    built before that fix -- or a material the user duplicated by hand -- can
+    still carry one, and writing ``Hull.001`` into the TXTR chunk produces a
+    model referencing a bitmap that does not exist. Materials that collapse onto
+    the same texture ID are merged, which is the intent: they stand for one
+    texture.
+
     Args:
         objects: Mesh objects being exported.
 
     Returns:
-        Texture names, sorted so the same scene always produces the same
-        texture-index assignment.
+        A ``(textures, mapping)`` pair. ``textures`` is sorted so the same scene
+        always produces the same texture-index assignment. ``mapping`` takes a
+        material name to the texture it exports as, and the per-face lookup must
+        use it too -- resolving the rule twice is how the texture list and the
+        faces end up disagreeing.
     """
-    tex_set = set()
+    material_names = set()
     for obj in objects:
         if obj.type != "MESH":
             continue
         for mat in obj.data.materials:
             if mat:
-                tex_set.add(mat.name)
-    return sorted(tex_set)
+                material_names.add(mat.name)
+
+    mapping, warnings = resolve_texture_names(material_names)
+    for warning in warnings:
+        log.warning("%s", warning)
+
+    return sorted(set(mapping.values())), mapping
 
 
 def _build_submodel(
     obj: bpy.types.Object,
     obj_to_index: dict[str, int],
     tex_index: dict[str, int],
+    material_textures: dict[str, str],
     min_bound: Vector3,
     max_bound: Vector3,
 ) -> Submodel:
@@ -321,6 +341,7 @@ def _build_submodel(
         obj: Mesh object to convert.
         obj_to_index: Object name to submodel index, for resolving the parent.
         tex_index: Texture name to index into the model's texture list.
+        material_textures: Material name to the texture it exports as.
         min_bound: Running minimum corner, updated in place.
         max_bound: Running maximum corner, updated in place.
 
@@ -363,7 +384,9 @@ def _build_submodel(
 
     uv_layer = mesh.uv_layers.active
     for poly in mesh.polygons:
-        sm.faces.append(_build_face(poly, mesh, obj, tex_index, uv_layer))
+        sm.faces.append(
+            _build_face(poly, mesh, obj, tex_index, material_textures, uv_layer)
+        )
 
     for v in sm.vertices:
         dist = v.position.magnitude()
@@ -400,6 +423,7 @@ def _build_face(
     mesh: bpy.types.Mesh,
     obj: bpy.types.Object,
     tex_index: dict[str, int],
+    material_textures: dict[str, str],
     uv_layer,
 ) -> ModelFace:
     """Convert one Blender polygon into a :class:`ModelFace`.
@@ -409,11 +433,16 @@ def _build_face(
         mesh: Mesh the polygon belongs to, for its loop list.
         obj: Object the mesh belongs to, for its material slots.
         tex_index: Texture name to index into the model's texture list.
+        material_textures: Material name to the texture it exports as, from
+            :func:`_collect_textures`. Resolving the suffix rule here instead
+            would let the faces and the texture list disagree.
         uv_layer: Active UV layer, or ``None`` if the mesh has no UVs.
 
     Returns:
         The face, textured when its material maps to a known texture and flat
-        :data:`DEFAULT_UNTEXTURED_COLOR` otherwise.
+        :data:`DEFAULT_UNTEXTURED_COLOR` otherwise. The material name is
+        resolved through ``material_textures`` so a duplicate-suffixed
+        material still finds the texture it was cloned from.
     """
     face = ModelFace()
     face.normal = Vector3(poly.normal.x, poly.normal.y, poly.normal.z)
@@ -421,9 +450,10 @@ def _build_face(
     mat = None
     if poly.material_index < len(obj.data.materials):
         mat = obj.data.materials[poly.material_index]
-    if mat and mat.name in tex_index:
+    texture = material_textures.get(mat.name) if mat else None
+    if texture is not None and texture in tex_index:
         face.textured = True
-        face.texnum = tex_index[mat.name]
+        face.texnum = tex_index[texture]
     else:
         face.textured = False
         face.color = Color(*DEFAULT_UNTEXTURED_COLOR)

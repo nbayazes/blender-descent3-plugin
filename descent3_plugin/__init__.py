@@ -43,6 +43,7 @@ _SUBMODULE_NAMES = ("preferences", "import_pof", "export_pof")
 _RELOAD_NAMES = (
     "constants",
     "mathutil",
+    "naming",
     "texutil",
     "poformat",
     "config",
