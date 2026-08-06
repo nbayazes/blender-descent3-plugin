@@ -454,10 +454,20 @@ Decisions that are not obvious from the code, and the reasoning behind them.
 - **Pure-Python parser/writer.** No C extension: Blender ships `struct`, and
   keeping `poformat.py` free of `bpy` is what lets the whole format layer be
   unit-tested outside Blender.
-- **No coordinate conversion.** Descent 3 and Blender are both Z-up
-  right-handed, so vertex positions pass through unchanged. UVs are the one
-  exception: Descent puts the origin at the top-left and Blender at the
-  bottom-left, so import negates V and export negates it back.
+- **Coordinate conversion is a rotation, not a mirror.** Descent 3 is
+  right-handed **Y-up**; Blender is right-handed **Z-up**. Both being
+  right-handed makes the difference a single 90-degree rotation about X, so
+  import maps `(x, y, z)` to `(x, -z, y)` and export maps it back to
+  `(x, z, -y)`. Because it is a rotation rather than a mirror, winding order is
+  untouched and normals transform exactly like positions — no face reversal is
+  needed anywhere.
+- **The conversion happens only at the Blender boundary.** Everything inside
+  `poformat` stays in file coordinates, so what the parser and writer exchange
+  is always exactly what is on disk. `mathutil.descent_to_blender` and
+  `blender_to_descent` are the only two places the axes change.
+- **UVs need their own flip.** Descent puts the UV origin at the top-left and
+  Blender at the bottom-left, so import negates V and export negates it back.
+  This is separate from the axis conversion above.
 - **1:1 scale.** Descent units are roughly metres and are imported unscaled.
 - **Dataclass model.** Parsing produces a plain `POFModel` tree with no Blender
   types in it, so the binary layer and the scene-building layer can be changed

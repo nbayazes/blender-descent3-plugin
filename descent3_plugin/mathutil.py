@@ -63,3 +63,50 @@ class Vector3:
         if m < NORMALIZE_EPSILON:
             return Vector3(0, 0, 0)
         return Vector3(self.x / m, self.y / m, self.z / m)
+
+
+# ---------------------------------------------------------------------------
+# Coordinate systems
+# ---------------------------------------------------------------------------
+# Descent 3 is right-handed **Y-up**; Blender is right-handed **Z-up**. Both are
+# right-handed, so the difference is a single rotation of 90 degrees about X --
+# not a mirror. That matters: a rotation preserves winding order and handedness,
+# so faces do not need reversing and normals transform exactly like positions.
+#
+#     Descent            Blender
+#     +Y  up        ->   +Z  up
+#     +Z  back      ->   -Y  back
+#     +X  right     ->   +X  right
+#
+# The conversion is applied at the Blender boundary only. Everything inside
+# poformat stays in file coordinates, so what the parser and writer exchange is
+# always exactly what is on disk.
+
+
+def descent_to_blender(v) -> Vector3:
+    """Convert a Descent 3 (Y-up) vector to Blender (Z-up) space.
+
+    Args:
+        v: Anything exposing ``x``, ``y`` and ``z`` -- a :class:`Vector3` from
+            the parser, typically.
+
+    Returns:
+        The same direction expressed in Blender's axes.
+    """
+    return Vector3(v.x, -v.z, v.y)
+
+
+def blender_to_descent(v) -> Vector3:
+    """Convert a Blender (Z-up) vector to Descent 3 (Y-up) space.
+
+    The exact inverse of :func:`descent_to_blender`, so a model that makes the
+    trip in both directions comes back bit-for-bit unchanged.
+
+    Args:
+        v: Anything exposing ``x``, ``y`` and ``z`` -- a ``mathutils.Vector``
+            straight from a mesh, typically.
+
+    Returns:
+        The same direction expressed in Descent 3's axes.
+    """
+    return Vector3(v.x, v.z, -v.y)

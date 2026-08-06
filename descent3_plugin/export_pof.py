@@ -14,7 +14,7 @@ from bpy_extras.io_utils import ExportHelper
 
 from . import poformat
 from .config import CONFIG_FILENAME, Config, config_for_path
-from .mathutil import Vector3
+from .mathutil import Vector3, blender_to_descent
 from .naming import resolve_texture_names
 from .constants import (
     EXPORT_OT_IDNAME,
@@ -77,7 +77,10 @@ DEFAULT_UNTEXTURED_COLOR = (0.5, 0.5, 0.5)
 
 #: Placeholder direction written for gun and attach points. Blender empties
 #: carry a rotation this exporter does not yet read, so every point is written
-#: facing +Z rather than in the direction the empty is actually pointing.
+#: facing the same way rather than where the empty actually points.
+#:
+#: Already expressed in Descent 3 (Y-up) space, because it goes straight into
+#: the file -- it must NOT be passed through :func:`blender_to_descent`.
 DEFAULT_POINT_NORMAL = (0.0, 0.0, 1.0)
 
 
@@ -368,7 +371,7 @@ def _build_submodel(
     # itself an exported mesh; a root submodel sits at the model origin.
     if obj.parent and obj.parent.type == "MESH":
         local_loc = obj.matrix_local.translation
-        sm.offset = Vector3(local_loc.x, local_loc.y, local_loc.z)
+        sm.offset = blender_to_descent(local_loc)
     else:
         sm.offset = Vector3(0, 0, 0)
 
@@ -376,11 +379,13 @@ def _build_submodel(
 
     for v in mesh.vertices:
         sv = SubmodelVertex()
-        sv.position = Vector3(v.co.x, v.co.y, v.co.z)
-        sv.normal = Vector3(v.normal.x, v.normal.y, v.normal.z)
+        sv.position = blender_to_descent(v.co)
+        sv.normal = blender_to_descent(v.normal)
         sv.alpha = poformat.ALPHA_OPAQUE
         sm.vertices.append(sv)
-        _grow_bounds(min_bound, max_bound, v.co)
+        # Bounds are grown from the converted position: the box is written
+        # to the file, so it has to be in the file's coordinate system.
+        _grow_bounds(min_bound, max_bound, sv.position)
 
     uv_layer = mesh.uv_layers.active
     for poly in mesh.polygons:
@@ -402,7 +407,7 @@ def _grow_bounds(min_bound: Vector3, max_bound: Vector3, co) -> None:
     Args:
         min_bound: Minimum corner, updated in place.
         max_bound: Maximum corner, updated in place.
-        co: A Blender vertex coordinate.
+        co: A vertex position, already converted to Descent 3 space.
     """
     if co.x < min_bound.x:
         min_bound.x = co.x
@@ -445,7 +450,7 @@ def _build_face(
         material still finds the texture it was cloned from.
     """
     face = ModelFace()
-    face.normal = Vector3(poly.normal.x, poly.normal.y, poly.normal.z)
+    face.normal = blender_to_descent(poly.normal)
 
     mat = None
     if poly.material_index < len(obj.data.materials):
@@ -523,7 +528,7 @@ def _collect_points(
         parent = obj_to_index.get(
             obj.parent.name if obj.parent else "", poformat.ROOT_SUBMODEL_INDEX
         )
-        point = Vector3(obj.location.x, obj.location.y, obj.location.z)
+        point = blender_to_descent(obj.location)
         points.append((point, parent))
     return points
 

@@ -66,6 +66,30 @@ Each face: `normal(vec3), n_fv(int32), textured(int32)` then if textured
 `texnum(int32)` else `rgb(3 bytes)`, then `n_fv * (index int32, u float, v float)`,
 then `[xdiff,ydiff floats if major>=21]`.
 
+## Coordinate system
+
+Descent 3 is right-handed **Y-up**; Blender is right-handed **Z-up**. Every
+vector in the file -- vertex positions, vertex and face normals, submodel
+offsets, gun/attach points, keyframe axes -- is in Descent space.
+
+`poformat` never converts: it hands back exactly what is on disk. The rotation
+happens at the Blender boundary only, in `mathutil.descent_to_blender` /
+`blender_to_descent`:
+
+```
+descent (x, y, z)  ->  blender (x, -z, y)     # 90 deg about X
+blender (x, y, z)  ->  descent (x,  z, -y)
+```
+
+Both spaces are right-handed, so this is a rotation and not a mirror --
+winding order is preserved and faces never need reversing. If a model imports
+mirrored or inside out, the cause is not this conversion.
+
+Note that a round-trip test cannot catch a *missing* conversion: with no
+conversion applied the transform is the identity in both directions, so
+import-then-export still returns the original bytes. Assert the rotated
+coordinate explicitly, as `tests/blender/test_coordinate_system.py` does.
+
 ## Textures
 
 The `TXTR` chunk is a list of **names**, and faces reference them by `texnum`

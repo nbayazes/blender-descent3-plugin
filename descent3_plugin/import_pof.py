@@ -30,6 +30,7 @@ from .constants import (
     PROP_KEY_PARENT,
     PROP_KEY_PROPERTIES,
 )
+from .mathutil import descent_to_blender
 from .poformat import AttachPoint, GunBank, ModelFace, POFModel, Submodel
 from .preferences import get_preferences
 from .texutil import clean_texture_dir, find_texture_image
@@ -324,7 +325,7 @@ def _import_points(
         empty = bpy.data.objects.new(f"{name_prefix}{i}", None)
         empty.empty_display_type = display_type
         empty.empty_display_size = display_size
-        empty.location = Vector((point.point.x, point.point.y, point.point.z))
+        empty.location = Vector(descent_to_blender(point.point).as_tuple())
         collection.objects.link(empty)
         parent = obj_by_index.get(point.parent)
         if parent is not None:
@@ -662,13 +663,15 @@ def _import_submodel(
 
     if not sm.vertices:
         obj = bpy.data.objects.new(sm.name or fallback_name, None)
-        obj.location = Vector((sm.offset.x, sm.offset.y, sm.offset.z))
+        obj.location = Vector(descent_to_blender(sm.offset).as_tuple())
         collection.objects.link(obj)
         return obj
 
     mesh = bpy.data.meshes.new(sm.name or fallback_name)
 
-    verts = [Vector((v.position.x, v.position.y, v.position.z)) for v in sm.vertices]
+    verts = [
+        Vector(descent_to_blender(v.position).as_tuple()) for v in sm.vertices
+    ]
 
     # Only faces with 3+ vertices become Blender polygons. Keep this filtered
     # list so UVs and material indices stay aligned with mesh.polygons even when
@@ -693,7 +696,7 @@ def _import_submodel(
     # Set vertex normals
     if len(sm.vertices) == len(mesh.vertices):
         custom_normals = [
-            (v.normal.x, v.normal.y, v.normal.z) for v in sm.vertices
+            descent_to_blender(v.normal).as_tuple() for v in sm.vertices
         ]
         try:
             mesh.normals_split_custom_set_from_vertices(custom_normals)
@@ -706,7 +709,7 @@ def _import_submodel(
             )
 
     obj = bpy.data.objects.new(sm.name or fallback_name, mesh)
-    obj.location = Vector((sm.offset.x, sm.offset.y, sm.offset.z))
+    obj.location = Vector(descent_to_blender(sm.offset).as_tuple())
     collection.objects.link(obj)
 
     _assign_materials(
