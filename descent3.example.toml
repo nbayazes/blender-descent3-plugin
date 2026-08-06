@@ -57,11 +57,19 @@
 # into version control keeps working wherever it is cloned.
 # search_dirs = ["textures", "../shared/textures"]
 
+# Subfolder that *exported* texture images are written into, relative to the
+# .pof. Import searches it too, so a model exported with its textures can be
+# re-imported with them and nothing has to be pointed anywhere. It must be a
+# plain relative subfolder -- absolute paths and '..' are refused, because this
+# names a folder beside the model, not somewhere else on the disk.
+# export_dir = "exported_textures"
+
 # Full search order, most specific first:
 #   1. the Texture Folder typed into the import dialog
 #   2. the directories listed above
 #   3. the model's own folder
-#   4. the Texture Library set in the add-on preferences
+#   4. the export_dir subfolder beneath it
+#   5. the Texture Library set in the add-on preferences
 
 
 # Export targets.
@@ -74,3 +82,17 @@
 # The export dialog's POF Version starts on "From project config", which uses
 # this value; picking a specific version there overrides it for that export.
 # version = 2300
+
+# Format written for texture images when exporting a model, or "NONE" to write
+# the model only. Exporting textures is opt-in: a model export should not drop
+# image files beside it unless that was asked for.
+#   "NONE"    write no images (default)
+#   "PNG"     lossless, and the first extension import looks for
+#   "TARGA"   uncompressed .tga, closest to Descent 3's own tooling
+# Descent's native OGF is not supported yet -- Blender cannot encode it.
+#
+# A source image already in the requested format is copied byte-for-byte; any
+# other combination is re-encoded with colour management neutralised, so a
+# scene using AgX does not bake a tone-map into its textures.
+# The export dialog's Textures control starts on "From project config".
+# texture_format = "NONE"

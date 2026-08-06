@@ -17,9 +17,14 @@ Run with: python -m pytest tests/test_naming.py -v
 import pytest
 
 from descent3_plugin.naming import (
+    TEXTURE_FORMAT_NONE,
+    TEXTURE_FORMATS,
     base_material_name,
+    blender_file_format,
     is_duplicate_material_name,
     resolve_texture_names,
+    texture_filename,
+    texture_format_extension,
 )
 
 
@@ -140,3 +145,45 @@ class TestNoTextureNameIsEverEmpty:
         mapping, _ = resolve_texture_names(names)
         for original, resolved in mapping.items():
             assert resolved or not original, (original, resolved)
+
+
+class TestTextureExportFormats:
+    """The Blender format identifier and the file extension are not the same
+    string -- TARGA writes .tga -- so the pairing is kept in one table."""
+
+    def test_supported_formats(self):
+        assert set(TEXTURE_FORMATS) == {"PNG", "TARGA"}
+
+    @pytest.mark.parametrize(
+        "fmt,blender,ext", [("PNG", "PNG", ".png"), ("TARGA", "TARGA", ".tga")]
+    )
+    def test_mapping(self, fmt, blender, ext):
+        assert blender_file_format(fmt) == blender
+        assert texture_format_extension(fmt) == ext
+
+    def test_targa_extension_is_not_its_identifier(self):
+        """The trap this table exists to prevent."""
+        assert texture_format_extension("TARGA") != ".targa"
+
+    def test_filename_uses_the_texture_id_verbatim(self):
+        """Import searches for the TXTR name, so the stem must not be altered."""
+        assert texture_filename("Hull", "PNG") == "Hull.png"
+        assert texture_filename("some_texture", "TARGA") == "some_texture.tga"
+
+    def test_filename_keeps_dots_in_the_texture_name(self):
+        """A Descent texture ID is not a filename; a dot in it is not an
+        extension to be replaced."""
+        assert texture_filename("panel.2", "PNG") == "panel.2.png"
+
+    def test_none_is_not_a_writable_format(self):
+        assert TEXTURE_FORMAT_NONE not in TEXTURE_FORMATS
+
+    def test_ogf_is_absent_until_it_can_be_encoded(self):
+        """Offering a format Blender cannot write would produce files the game
+        rejects. The entry lands with an encoder, not before one."""
+        assert "OGF" not in TEXTURE_FORMATS
+
+    @pytest.mark.parametrize("fmt", ["ogf", "png", "jpeg", "", "NOPE"])
+    def test_unsupported_formats_raise(self, fmt):
+        with pytest.raises(KeyError):
+            texture_format_extension(fmt)

@@ -29,7 +29,7 @@
 set -u
 
 ADDON_ID="descent3_plugin"
-REQUIRED_FILES="__init__.py config.py constants.py export_pof.py import_pof.py mathutil.py naming.py poformat.py preferences.py texutil.py"
+REQUIRED_FILES="__init__.py config.py constants.py export_pof.py import_pof.py mathutil.py naming.py poformat.py preferences.py texexport.py texutil.py"
 # Non-.py files that must also be installed. blender_manifest.toml is the
 # canonical version and is what Blender 4.2+ reads to treat the folder as an
 # extension; the previous manifest sat in the repo unshipped because the copy

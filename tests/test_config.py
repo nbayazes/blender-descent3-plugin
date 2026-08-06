@@ -288,3 +288,56 @@ class TestExampleFile:
                 if key not in _SCHEMA.get(section, ()):
                     unknown.append(f"{section}.{key}")
         assert unknown == []
+
+
+class TestTextureExportSettings:
+    def test_export_dir_default(self):
+        assert DEFAULT_CONFIG.textures.export_dir == "exported_textures"
+
+    def test_texture_format_defaults_to_none(self):
+        """Exporting a model must not drop image files beside it unasked."""
+        assert DEFAULT_CONFIG.export.texture_format == "NONE"
+
+    @pytest.mark.parametrize("value", ["PNG", "TARGA", "NONE"])
+    def test_valid_formats_accepted(self, value):
+        config, warnings = parse_config({"export": {"texture_format": value}})
+        assert config.export.texture_format == value
+        assert warnings == []
+
+    def test_format_is_case_insensitive(self):
+        config, _ = parse_config({"export": {"texture_format": "targa"}})
+        assert config.export.texture_format == "TARGA"
+
+    @pytest.mark.parametrize("value", ["ogf", "jpeg", "tga", ""])
+    def test_unsupported_format_rejected(self, value):
+        config, warnings = parse_config({"export": {"texture_format": value}})
+        assert config.export.texture_format == "NONE"
+        assert any("not supported" in w for w in warnings)
+
+    def test_export_dir_accepts_a_relative_subfolder(self):
+        config, warnings = parse_config({"textures": {"export_dir": "tex/out"}})
+        assert config.textures.export_dir == "tex/out"
+        assert warnings == []
+
+    @pytest.mark.parametrize(
+        "value,reason",
+        [
+            ("C:/somewhere", "absolute"),
+            ("/textures", "separator"),
+            (r"\textures", "separator"),
+            ("../escape", "escapes"),
+            ("tex/../..", "escapes"),
+        ],
+    )
+    def test_export_dir_must_stay_beside_the_model(self, value, reason):
+        """Python 3.13 stopped treating a single leading slash as absolute on
+        Windows, so os.path.isabs alone would let '/textures' through -- and it
+        resolves to the drive root."""
+        config, warnings = parse_config({"textures": {"export_dir": value}})
+        assert config.textures.export_dir == DEFAULT_CONFIG.textures.export_dir
+        assert any(reason in w for w in warnings), warnings
+
+    def test_empty_export_dir_rejected(self):
+        config, warnings = parse_config({"textures": {"export_dir": "   "}})
+        assert config.textures.export_dir == DEFAULT_CONFIG.textures.export_dir
+        assert any("non-empty" in w for w in warnings)

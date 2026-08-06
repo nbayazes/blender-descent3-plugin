@@ -126,3 +126,76 @@ def resolve_texture_names(
             f"Descent 3 will not find a texture called '{name}'."
         )
     return mapping, warnings
+
+
+# ---------------------------------------------------------------------------
+# Texture export formats
+# ---------------------------------------------------------------------------
+
+#: Value meaning "do not write any texture images".
+TEXTURE_FORMAT_NONE = "NONE"
+
+#: Supported export formats: identifier -> (Blender ``file_format``, extension).
+#:
+#: The Blender identifier is what ``scene.render.image_settings.file_format``
+#: takes. It is *not* interchangeable with the extension -- ``TARGA`` writes
+#: ``.tga`` -- which is exactly why the pairing lives in one table rather than
+#: being derived at each call site.
+#:
+#: Descent 3's native OGF belongs here eventually. It is deliberately absent
+#: rather than present-and-broken: Blender cannot write OGF, so it needs its own
+#: encoder, and adding the entry once that exists is the only change required.
+TEXTURE_FORMATS = {
+    "PNG": ("PNG", ".png"),
+    "TARGA": ("TARGA", ".tga"),
+}
+
+
+def texture_format_extension(fmt: str) -> str:
+    """Return the file extension for an export format identifier.
+
+    Args:
+        fmt: Key of :data:`TEXTURE_FORMATS`.
+
+    Returns:
+        The extension, including the leading dot.
+
+    Raises:
+        KeyError: If the format is not supported. Callers validate before
+            reaching here; this is a programming error, not user input.
+    """
+    return TEXTURE_FORMATS[fmt][1]
+
+
+def blender_file_format(fmt: str) -> str:
+    """Return the Blender ``file_format`` identifier for an export format.
+
+    Args:
+        fmt: Key of :data:`TEXTURE_FORMATS`.
+
+    Returns:
+        The value to assign to ``scene.render.image_settings.file_format``.
+
+    Raises:
+        KeyError: If the format is not supported.
+    """
+    return TEXTURE_FORMATS[fmt][0]
+
+
+def texture_filename(texture_name: str, fmt: str) -> str:
+    """Return the filename a texture should be written as.
+
+    The stem is the texture ID exactly as it appears in the model's TXTR chunk,
+    because that is what import searches for. Renaming here would break the
+    round trip just as surely as a ``.001`` suffix does.
+
+    Args:
+        texture_name: Texture ID from the model.
+        fmt: Key of :data:`TEXTURE_FORMATS`.
+
+    Returns:
+        ``<texture name><extension>``. Any extension already on the texture
+        name is left alone rather than stripped -- Descent texture IDs do not
+        normally carry one, and a name like ``panel.2`` is not an extension.
+    """
+    return f"{texture_name}{texture_format_extension(fmt)}"

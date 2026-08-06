@@ -107,9 +107,43 @@ image textures.
 | **Selected Only** | Export only the selected objects rather than every mesh in the file |
 | **Export Gun Points** | Write empties named with the gun prefix as GPNT gun points |
 | **Export Attach Points** | Write empties named with the attach prefix as ATCH attach points |
+| **Textures** | Also write each material's image beside the model. *None* by default; *From project config* uses `texture_format` from your `descent3.toml` |
 
 Material names are written to the model's texture table, so name your
 materials after the Descent 3 textures you want the faces to reference.
+
+### Exporting textures
+
+The **Textures** control writes each material's image alongside the model, so a
+model and the images it needs can be handed over together. Files land in an
+`exported_textures/` subfolder next to the `.pof` and are named after the
+texture IDs in the model — which is exactly what the importer searches for, so
+re-importing finds them with no configuration at all.
+
+```
+export/
+  model.pof
+  exported_textures/
+    Hull.png
+    Turret.png
+```
+
+PNG and Targa are supported. Descent 3's native **OGF is not** — Blender cannot
+encode it, and offering the option would produce files the game rejects; it
+lands when an encoder does.
+
+Two things happen quietly in your favour here:
+
+- An image whose source file is **already in the requested format is copied
+  byte-for-byte**. No re-encode, no quality loss, no colour management.
+- Anything that *is* converted has colour management neutralised first. Blender
+  5.2 defaults its view transform to **AgX**, and the only API that genuinely
+  converts formats renders through it — so textures would otherwise export
+  tone-mapped and washed out. Your scene's settings are restored afterwards.
+
+A material with no image texture is reported rather than skipped silently, so a
+half-populated folder is never a surprise. Change the folder name with
+`textures.export_dir`, and the default format with `export.texture_format`.
 
 ## How textures are located
 

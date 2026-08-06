@@ -72,6 +72,7 @@ $RequiredFiles = @(
     'naming.py',
     'poformat.py',
     'preferences.py',
+    'texexport.py',
     'texutil.py'
 )
 

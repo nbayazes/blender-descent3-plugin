@@ -263,7 +263,8 @@ def _texture_search_dirs(
     Returns:
         Directories in search order, most specific first: the dialog's Texture
         Folder, the project's configured directories, the model's own folder,
-        and finally the user's texture library as a catch-all.
+        the subfolder export writes textures into, and finally the user's
+        texture library as a catch-all.
     """
     search_dirs: list[str] = []
     if operator is not None:
@@ -286,6 +287,15 @@ def _texture_search_dirs(
                         configured)
     if model_dir not in search_dirs:
         search_dirs.append(model_dir)
+
+    # Where export drops texture images. Searching it is what lets a model
+    # exported with its textures be re-imported with them, without the user
+    # having to point the dialog anywhere.
+    exported = os.path.normpath(
+        os.path.join(model_dir, config.textures.export_dir)
+    )
+    if exported not in search_dirs and os.path.isdir(exported):
+        search_dirs.append(exported)
 
     library = clean_texture_dir(getattr(prefs, "texture_library", "") or "")
     if library:

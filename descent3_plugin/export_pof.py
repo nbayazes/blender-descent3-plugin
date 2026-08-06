@@ -7,6 +7,7 @@ binary writing itself lives in :mod:`descent3_plugin.poformat`, which has no
 """
 
 import logging
+import os
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
@@ -15,7 +16,12 @@ from bpy_extras.io_utils import ExportHelper
 from . import poformat
 from .config import CONFIG_FILENAME, Config, config_for_path
 from .mathutil import Vector3, blender_to_descent
-from .naming import resolve_texture_names
+from .naming import (
+    TEXTURE_FORMAT_NONE,
+    TEXTURE_FORMATS,
+    resolve_texture_names,
+)
+from .texexport import export_textures
 from .constants import (
     EXPORT_OT_IDNAME,
     POF_FILENAME_EXT,
@@ -68,6 +74,28 @@ EXPORT_VERSION_ITEMS = [
 #: Default selection: defer to the project.
 DEFAULT_EXPORT_VERSION = EXPORT_VERSION_FROM_CONFIG
 
+#: Identifier meaning "whatever the project's descent3.toml asks for",
+#: mirroring the POF version control above.
+TEXTURE_FORMAT_FROM_CONFIG = "CONFIG"
+
+#: Texture-image formats offered in the export dialog.
+#:
+#: One control rather than a checkbox plus a format list: "do not write
+#: textures" and "write them as PNG" are the same decision, and splitting
+#: them lets a user tick the box, leave the format wrong, and not find out.
+#:
+#: Descent 3's native OGF is absent on purpose. Blender cannot encode it, so
+#: offering it would produce a file the game rejects; the entry goes in
+#: alongside an encoder, not before one.
+TEXTURE_FORMAT_ITEMS = [
+    (TEXTURE_FORMAT_FROM_CONFIG, "From project config",
+     "Use the texture_format set in the project's descent3.toml, or write "
+     "no textures if it sets none"),
+    (TEXTURE_FORMAT_NONE, "None", "Write the model only, no texture images"),
+    ("PNG", "PNG", "Lossless, and what the importer looks for first"),
+    ("TARGA", "Targa (.tga)", "Uncompressed, closest to Descent 3's own tooling"),
+]
+
 #: Seed for the bounding-box accumulator, chosen large enough that the first
 #: vertex compared always replaces it on both the min and max side.
 BOUNDS_INIT = 1e30
@@ -115,6 +143,16 @@ class ExportPOF(bpy.types.Operator, ExportHelper):
         description="Export attach point empty objects",
         default=True,
     )
+    texture_format: EnumProperty(
+        name="Textures",
+        description=(
+            "Write each material's image alongside the model, so it can be "
+            "handed over complete. Files are named after the texture IDs in "
+            "the model, which is what the importer searches for"
+        ),
+        items=TEXTURE_FORMAT_ITEMS,
+        default=TEXTURE_FORMAT_FROM_CONFIG,
+    )
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         """Run the export and report the outcome to Blender."""
@@ -127,6 +165,8 @@ class ExportPOF(bpy.types.Operator, ExportHelper):
         layout.prop(self, "export_selected")
         layout.prop(self, "export_guns")
         layout.prop(self, "export_attach")
+        layout.separator()
+        layout.prop(self, "texture_format")
 
 
 def save_pof(
@@ -167,7 +207,7 @@ def save_pof(
             operator.report({"WARNING"}, "No mesh objects to export")
         return {"CANCELLED"}
 
-    model = _build_pof_model(context, objects, operator, config)
+    model, material_textures = _build_pof_model(context, objects, operator, config)
 
     try:
         data = poformat.write_pof(model)
@@ -179,10 +219,99 @@ def save_pof(
             operator.report({"ERROR"}, f"Failed to write POF: {e}")
         return {"CANCELLED"}
 
+    summary = f"Exported {len(model.submodels)} submodels"
+
+    fmt = _resolve_texture_format(operator, config)
+    if fmt != TEXTURE_FORMAT_NONE:
+        written, problems = _write_textures(
+            context, filepath, model, objects, material_textures, fmt, config
+        )
+        summary += f", {len(written)} textures"
+        for problem in problems:
+            log.warning("Texture export: %s", problem)
+            if operator:
+                operator.report({"WARNING"}, f"texture: {problem}")
+
     if operator:
-        operator.report({"INFO"}, f"Exported {len(model.submodels)} submodels")
+        operator.report({"INFO"}, summary)
 
     return {"FINISHED"}
+
+
+def _resolve_texture_format(operator: ExportPOF | None, config: Config) -> str:
+    """Return the texture format to write.
+
+    Args:
+        operator: Operator carrying the dialog selection, or ``None``.
+        config: Project configuration resolved from the destination.
+
+    Returns:
+        A key of :data:`~descent3_plugin.naming.TEXTURE_FORMATS`, or
+        :data:`~descent3_plugin.naming.TEXTURE_FORMAT_NONE`. Without an
+        operator the project decides, so a scripted export and the dialog's
+        default agree instead of quietly differing.
+    """
+    if operator is None:
+        return config.export.texture_format
+    selection = operator.texture_format
+    if selection == TEXTURE_FORMAT_FROM_CONFIG:
+        return config.export.texture_format
+    return selection
+
+
+def _write_textures(
+    context: bpy.types.Context,
+    filepath: str,
+    model: POFModel,
+    objects: list[bpy.types.Object],
+    material_textures: dict[str, str],
+    fmt: str,
+    config: Config,
+) -> tuple[list[str], list[str]]:
+    """Write the images for every texture the model references.
+
+    Args:
+        context: Blender context, for the scene used during conversion.
+        filepath: Path of the model just written; textures go in a subfolder
+            beside it.
+        model: The exported model, for its texture list.
+        objects: Mesh objects that were exported.
+        material_textures: Material name to the texture it exports as.
+        fmt: Format to write.
+        config: Project configuration supplying the subfolder name.
+
+    Returns:
+        A ``(written, problems)`` pair from
+        :func:`~descent3_plugin.texexport.export_textures`.
+    """
+    # Pick one material per texture ID. Several materials can map onto the
+    # same texture once duplicate suffixes are resolved, and they are meant
+    # to be the same image, so the first is representative.
+    by_texture: dict[str, bpy.types.Material] = {}
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        for mat in obj.data.materials:
+            if not mat:
+                continue
+            texture = material_textures.get(mat.name)
+            if texture and texture not in by_texture:
+                by_texture[texture] = mat
+
+    missing = [t for t in model.textures if t not in by_texture]
+    directory = os.path.join(
+        os.path.dirname(os.path.abspath(filepath)), config.textures.export_dir
+    )
+    written, problems = export_textures(
+        by_texture, directory, fmt, context.scene
+    )
+    problems.extend(
+        f"{name}: referenced by the model but no material carries it"
+        for name in missing
+    )
+    if written:
+        log.info("Wrote %d texture(s) to %s", len(written), directory)
+    return written, problems
 
 
 def _build_pof_model(
@@ -190,7 +319,7 @@ def _build_pof_model(
     objects: list[bpy.types.Object],
     operator: ExportPOF | None = None,
     config: Config | None = None,
-) -> POFModel:
+) -> tuple[POFModel, dict[str, str]]:
     """Build a :class:`POFModel` from Blender objects.
 
     Args:
@@ -204,8 +333,11 @@ def _build_pof_model(
             existed.
 
     Returns:
-        A model ready for :func:`descent3_plugin.poformat.write_pof`, with its
-        hierarchy already built.
+        A ``(model, material_textures)`` pair. The model is ready for
+        :func:`descent3_plugin.poformat.write_pof` with its hierarchy already
+        built; the mapping takes a material name to the texture it exported as,
+        and is handed back rather than recomputed so texture export cannot
+        disagree with what was written into the file.
     """
     if config is None:
         config = Config()
@@ -267,7 +399,7 @@ def _build_pof_model(
 
     model.build_hierarchy()
 
-    return model
+    return model, material_textures
 
 
 def _resolve_version(operator: ExportPOF | None, config: Config) -> int:

@@ -31,6 +31,7 @@ from .constants import (
     SUBMODEL_FALLBACK_PREFIX,
     UV_LAYER_NAME,
 )
+from .naming import TEXTURE_FORMAT_NONE, TEXTURE_FORMATS
 from .poformat import MIN_OBJFILE_VERSION, OBJFILE_VERSION
 from .texutil import IMAGE_EXTENSIONS
 
@@ -86,10 +87,16 @@ class TextureConfig:
         search_dirs: Extra directories to search, ahead of the model's own
             folder. Relative entries resolve against the config file, so a
             checked-in project keeps working on someone else's machine.
+        export_dir: Subfolder beside the exported model that written texture
+            images go into, relative to the ``.pof``. Import searches it too, so
+            an exported model and its textures round-trip without configuration.
+            The name carries "exported" deliberately: these are generated files,
+            and nothing should mistake them for hand-authored source art.
     """
 
     extensions: tuple[str, ...] = tuple(IMAGE_EXTENSIONS)
     search_dirs: tuple[str, ...] = ()
+    export_dir: str = "exported_textures"
 
 
 @dataclass(frozen=True)
@@ -99,9 +106,14 @@ class ExportConfig:
     Attributes:
         version: POF version new files target. A project usually pins this,
             because it is a property of the game build being modded.
+        texture_format: Format written for texture images, or
+            :data:`~descent3_plugin.naming.TEXTURE_FORMAT_NONE` to write none.
+            Defaults to writing none: exporting a model should not drop image
+            files beside it unless that was asked for.
     """
 
     version: int = OBJFILE_VERSION
+    texture_format: str = TEXTURE_FORMAT_NONE
 
 
 @dataclass(frozen=True)
@@ -133,8 +145,8 @@ _SCHEMA: dict[str, set[str]] = {
     "naming": {
         "gun_prefix", "attach_prefix", "submodel_fallback_prefix", "uv_layer",
     },
-    "textures": {"extensions", "search_dirs"},
-    "export": {"version"},
+    "textures": {"extensions", "search_dirs", "export_dir"},
+    "export": {"version", "texture_format"},
 }
 
 
@@ -186,6 +198,32 @@ def _parse_naming(table: dict, warnings: list[str]) -> NamingConfig:
     return replace(NamingConfig(), **values)
 
 
+def _rejected_export_dir(value: str) -> str | None:
+    """Return why ``value`` is unusable as an export subfolder, or None.
+
+    This has to be stricter than :func:`os.path.isabs`. Python 3.13 changed
+    ``ntpath.isabs`` so a single leading slash is no longer absolute on Windows,
+    which means ``"/textures"`` passes that check and then resolves to the root
+    of the current drive. The setting exists to name a folder *beside the
+    exported model*, so anything that could land somewhere else is refused.
+
+    Args:
+        value: The configured directory, already stripped.
+
+    Returns:
+        A message describing the problem, or ``None`` when the value is a plain
+        relative subfolder.
+    """
+    if os.path.isabs(value) or os.path.splitdrive(value)[0]:
+        return f"{value!r} is an absolute path, but it must be relative to the model"
+    if value[0] in "/\\":
+        return f"{value!r} starts with a path separator, which resolves to the drive root"
+    parts = value.replace("\\", "/").split("/")
+    if ".." in parts:
+        return f"{value!r} escapes the model's folder with '..'"
+    return None
+
+
 def _parse_textures(table: dict, warnings: list[str]) -> TextureConfig:
     """Build a :class:`TextureConfig` from the ``[textures]`` table."""
     values = {}
@@ -203,6 +241,18 @@ def _parse_textures(table: dict, warnings: list[str]) -> TextureConfig:
         dirs = _coerce_str_tuple(table["search_dirs"], "textures.search_dirs", warnings)
         if dirs is not None:
             values["search_dirs"] = dirs
+    if "export_dir" in table:
+        export_dir = table["export_dir"]
+        if not isinstance(export_dir, str) or not export_dir.strip():
+            warnings.append(
+                "textures.export_dir: expected a non-empty string, ignoring"
+            )
+        else:
+            problem = _rejected_export_dir(export_dir.strip())
+            if problem:
+                warnings.append(f"textures.export_dir: {problem}; ignoring")
+            else:
+                values["export_dir"] = export_dir.strip()
     return replace(TextureConfig(), **values)
 
 
@@ -220,6 +270,20 @@ def _parse_export(table: dict, warnings: list[str]) -> ExportConfig:
             )
         else:
             values["version"] = version
+    if "texture_format" in table:
+        fmt = table["texture_format"]
+        if not isinstance(fmt, str):
+            warnings.append("export.texture_format: expected a string, ignoring")
+        else:
+            upper = fmt.strip().upper()
+            if upper in TEXTURE_FORMATS or upper == TEXTURE_FORMAT_NONE:
+                values["texture_format"] = upper
+            else:
+                allowed = ", ".join(sorted(TEXTURE_FORMATS) + [TEXTURE_FORMAT_NONE])
+                warnings.append(
+                    f"export.texture_format: {fmt!r} is not supported "
+                    f"(expected one of {allowed}); ignoring"
+                )
     return replace(ExportConfig(), **values)
 
 
