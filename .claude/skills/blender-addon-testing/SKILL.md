@@ -121,7 +121,12 @@ Run this with the real config (NO `--factory-startup`).
 
 ## Headless test patterns
 
-Run: `blender.exe --background --factory-startup --python <script.py>`
+Run: `blender.exe --background --factory-startup --python-exit-code 1 --python <script.py>`
+
+**`--python-exit-code 1` matters.** Blender exits 0 when a script raises or
+fails to parse, so a test that dies before reaching its own `sys.exit(1)`
+looks like a pass. Measured: a file with a syntax error exits 0 without the
+flag and 1 with it.
 
 **A) Call the import/export functions directly** (fastest; no install needed,
 bypasses operator registration). This is what `tests/blender/test_uv_roundtrip.py`

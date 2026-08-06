@@ -253,7 +253,11 @@ def _resolve_texture_format(operator: ExportPOF | None, config: Config) -> str:
     """
     if operator is None:
         return config.export.texture_format
-    selection = operator.texture_format
+    # getattr, not attribute access: save_pof is called with duck-typed
+    # stand-ins from the headless scripts, and adding a property to the operator
+    # would otherwise break every one of them. Defaulting to the config keeps a
+    # caller that predates this option behaving as it always did.
+    selection = getattr(operator, "texture_format", TEXTURE_FORMAT_FROM_CONFIG)
     if selection == TEXTURE_FORMAT_FROM_CONFIG:
         return config.export.texture_format
     return selection
@@ -417,7 +421,7 @@ def _resolve_version(operator: ExportPOF | None, config: Config) -> int:
     """
     if operator is None:
         return config.export.version
-    selection = operator.export_version
+    selection = getattr(operator, "export_version", EXPORT_VERSION_FROM_CONFIG)
     if selection == EXPORT_VERSION_FROM_CONFIG:
         return config.export.version
     return int(selection)

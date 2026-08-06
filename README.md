@@ -117,8 +117,7 @@ materials after the Descent 3 textures you want the faces to reference.
 The **Textures** control writes each material's image alongside the model, so a
 model and the images it needs can be handed over together. Files land in an
 `exported_textures/` subfolder next to the `.pof` and are named after the
-texture IDs in the model — which is exactly what the importer searches for, so
-re-importing finds them with no configuration at all.
+texture IDs in the model, which is what the importer searches for.
 
 ```
 export/
@@ -144,6 +143,18 @@ Two things happen quietly in your favour here:
 A material with no image texture is reported rather than skipped silently, so a
 half-populated folder is never a surprise. Change the folder name with
 `textures.export_dir`, and the default format with `export.texture_format`.
+
+**Import does not search this folder.** Exports stay sandboxed from the models
+they came from: widening the search automatically would make the importer
+harder to predict, and keeping generated output out of the source pipeline is
+often deliberate. If you do want those images picked up, opt in explicitly —
+either point the import dialog's **Texture Folder** at it, or add it to your
+project config:
+
+```toml
+[textures]
+search_dirs = ["exported_textures"]
+```
 
 ## How textures are located
 
@@ -334,6 +345,9 @@ Texture search order, most specific first:
 3. the model's own folder
 4. the **Texture Library** from preferences
 
+The folder that texture *export* writes into is **not** on that list. See
+[Exporting textures](#exporting-textures).
+
 ### Format constants — not configurable
 
 Version gates, chunk IDs and flag bits are facts about the POF binary
@@ -417,9 +431,20 @@ inside `bpy`, so those are driven through real Blender. Each is a standalone
 script that exits non-zero on failure:
 
 ```bash
-blender --background --factory-startup --python tests/blender/test_uv_roundtrip.py
-blender --background --factory-startup --python tests/blender/test_material_reuse.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_uv_roundtrip.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_material_reuse.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_coordinate_system.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_texture_export.py
 ```
+
+> **`--python-exit-code 1` is not optional.** Blender exits **0** when a script
+> raises or fails to parse, so without it a test that crashes before reaching
+> its own `sys.exit(1)` reads as a pass. That flag makes a Python failure a
+> non-zero exit.
 
 `test_uv_roundtrip.py` guards UV orientation: Descent 3 puts the UV origin at
 the top-left and Blender at the bottom-left, so import negates V and export

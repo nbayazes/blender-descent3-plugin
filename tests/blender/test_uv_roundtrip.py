@@ -8,7 +8,8 @@ bottom-left, so import negates V and export must negate it back; when only one
 side did, every exported texture came out vertically mirrored.
 
 Run:
-    blender.exe --background --factory-startup --python tests/blender/test_uv_roundtrip.py
+    blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_uv_roundtrip.py
 
 Exits non-zero on failure so it can be wired into CI.
 """

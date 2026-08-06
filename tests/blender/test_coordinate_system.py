@@ -11,7 +11,8 @@ whether the conversion is actually *applied* at every point where data crosses
 into or out of Blender -- a missed call site is invisible to a unit test and
 shows up as a model lying on its side.
 
-    blender --background --factory-startup --python tests/blender/test_coordinate_system.py
+    blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_coordinate_system.py
 
 Exits non-zero on failure so it can be wired into CI.
 """

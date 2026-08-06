@@ -58,18 +58,21 @@
 # search_dirs = ["textures", "../shared/textures"]
 
 # Subfolder that *exported* texture images are written into, relative to the
-# .pof. Import searches it too, so a model exported with its textures can be
-# re-imported with them and nothing has to be pointed anywhere. It must be a
-# plain relative subfolder -- absolute paths and '..' are refused, because this
-# names a folder beside the model, not somewhere else on the disk.
+# .pof. Export-only: import does NOT search it, so generated output stays
+# sandboxed from the models it came from. Add it to search_dirs above if you
+# want those images picked up on import.
+#
+# It must be a plain relative subfolder -- absolute paths, leading separators
+# and '..' are refused, because this names a folder beside the model rather
+# than somewhere else on the disk.
 # export_dir = "exported_textures"
 
 # Full search order, most specific first:
 #   1. the Texture Folder typed into the import dialog
 #   2. the directories listed above
 #   3. the model's own folder
-#   4. the export_dir subfolder beneath it
-#   5. the Texture Library set in the add-on preferences
+#   4. the Texture Library set in the add-on preferences
+# export_dir is deliberately absent from that list.
 
 
 # Export targets.

@@ -9,7 +9,8 @@ brought half the model back untextured.
 
 pytest cannot reach this: it lives entirely in ``bpy``. Run inside Blender:
 
-    blender.exe --background --factory-startup --python tests/blender/test_material_reuse.py
+    blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_material_reuse.py
 
 Exits non-zero on failure so it can be wired into CI.
 """

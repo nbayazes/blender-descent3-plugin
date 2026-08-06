@@ -12,7 +12,8 @@ silently wrong, and both are asserted here rather than trusted:
    Blender 5.2 defaults the view transform to AgX. Exported textures would come
    out tone-mapped. The bytes are compared against the untouched source.
 
-    blender --background --factory-startup --python tests/blender/test_texture_export.py
+    blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_texture_export.py
 
 Exits non-zero on failure so it can be wired into CI.
 """
@@ -173,9 +174,10 @@ check("scene view transform restored after export",
       scene.view_settings.view_transform == "AgX",
       scene.view_settings.view_transform)
 
-# --- 5. the round trip ---------------------------------------------------
-# A model exported with its textures must re-import fully textured, with no
-# help from the dialog -- import searches the export subfolder for exactly this.
+# --- 5. the export folder is written, but NOT auto-searched --------------
+# Import deliberately does not widen its search to the export folder. Doing so
+# on the user's behalf makes the importer unpredictable, and a project may be
+# sandboxed off from its own exports on purpose. Opting in is a config change.
 out, _ = export_with("PNG", "roundtrip")
 model_path = os.path.join(out, "model.pof")
 written = poformat.parse_pof(open(model_path, "rb").read())
@@ -184,7 +186,8 @@ check("exported model still names its textures",
 
 for t in written.textures:
     hit = find_texture_image(t, [os.path.join(out, EXPORT_DIR)])
-    check(f"texture '{t}' resolves in the export folder", hit is not None)
+    check(f"texture '{t}' was written and is findable in the export folder",
+          hit is not None)
 
 wipe()
 load_pof(bpy.context, model_path, FakeImportOp())
@@ -192,7 +195,39 @@ textured = sorted(
     m.name for m in bpy.data.materials
     if m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes)
 )
-check("re-import finds the exported textures with no configuration",
+check("re-import does NOT silently reach into the export folder",
+      textured == [],
+      f"textured={textured} (the export folder must not be searched implicitly)")
+
+# Opting in through the project config must work, and is the documented route.
+with open(os.path.join(out, "descent3.toml"), "w", encoding="utf-8") as f:
+    f.write('[textures]\nsearch_dirs = ["%s"]\n' % EXPORT_DIR)
+
+wipe()
+load_pof(bpy.context, model_path, FakeImportOp())
+textured = sorted(
+    m.name for m in bpy.data.materials
+    if m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes)
+)
+check("listing the export folder in search_dirs finds the textures",
+      textured == sorted(source.textures),
+      f"textured={textured}")
+
+# The dialog's Texture Folder is the other route, and needs no config file.
+os.remove(os.path.join(out, "descent3.toml"))
+
+
+class OptedInImportOp(FakeImportOp):
+    texture_dir = os.path.join(out, EXPORT_DIR)
+
+
+wipe()
+load_pof(bpy.context, model_path, OptedInImportOp())
+textured = sorted(
+    m.name for m in bpy.data.materials
+    if m.use_nodes and any(n.type == "TEX_IMAGE" and n.image for n in m.node_tree.nodes)
+)
+check("pointing the dialog's Texture Folder at it also works",
       textured == sorted(source.textures),
       f"textured={textured}")
 

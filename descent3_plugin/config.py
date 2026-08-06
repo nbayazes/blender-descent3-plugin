@@ -88,9 +88,10 @@ class TextureConfig:
             folder. Relative entries resolve against the config file, so a
             checked-in project keeps working on someone else's machine.
         export_dir: Subfolder beside the exported model that written texture
-            images go into, relative to the ``.pof``. Import searches it too, so
-            an exported model and its textures round-trip without configuration.
-            The name carries "exported" deliberately: these are generated files,
+            images go into, relative to the ``.pof``. Export-only: import does
+            not search it, so exports stay sandboxed from the models they came
+            from unless the folder is listed in ``search_dirs`` deliberately.
+            The name carries "exported" on purpose -- these are generated files,
             and nothing should mistake them for hand-authored source art.
     """
 
