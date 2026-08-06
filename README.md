@@ -99,7 +99,7 @@ image textures.
 
 `File → Export → Descent 3 POF/OOF (.pof)`.
 
-![The Descent 3 export dialog, with POF Version set to "From project config", plus Selected Only, Export Gun Points and Export Attach Points](docs/images/export-dialog.png)
+![The Descent 3 export dialog. POF Version and Textures are both set to "From project config"; Selected Only, Export Gun Points and Export Attach Points are ticked. The file listing shows an exported_textures folder written beside Untitled.pof](docs/images/export-dialog.png)
 
 | Option | Description |
 |--------|-------------|
@@ -126,6 +126,12 @@ export/
     Hull.png
     Turret.png
 ```
+
+**Existing texture files are overwritten without asking.** Blender guards the
+model file itself — the export button turns red and reads *Overwrite* when the
+`.pof` already exists, as in the screenshot above — but that guard does not
+extend to the images. If you hand-edit an exported texture outside Blender,
+re-exporting replaces it.
 
 PNG and Targa are supported. Descent 3's native **OGF is not** — Blender cannot
 encode it, and offering the option would produce files the game rejects; it
