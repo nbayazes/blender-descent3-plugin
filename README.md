@@ -273,75 +273,65 @@ module-scope `import bpy` reappears in any of those modules.
 
 ## Running the tests
 
-There are two tiers, and they cover different things.
+```bash
+./run_tests.sh          # macOS / Linux / Git Bash
+.\run_tests.ps1         # Windows PowerShell
+```
 
-| Tier | Needs Blender? | Covers |
-|------|----------------|--------|
-| pytest suite | no | the `bpy`-free half: parsing, writing, naming, config, the version matrix |
-| `tests/blender/` scripts | yes | the half that only exists inside Blender: meshes, materials, UVs, operators |
+That is the whole thing. The script finds Blender, uses **Blender's own Python**
+to run the suite, and installs pytest the first time if it is missing.
 
-### 1. The pytest suite (fast)
+```
+==> Blender: E:\Steam\steamapps\common\Blender\blender.exe
+    Python 3.13.13  (E:\Steam\...\Blender\5.2\python\bin\python.exe)
+==> Running tests
+286 passed in 0.53s
+==> all tests passed
+```
+
+Arguments go straight to pytest:
+
+```bash
+./run_tests.sh -k naming -v
+./run_tests.sh tests/test_poformat.py
+```
+
+Other options:
+
+| Option | Effect |
+|--------|--------|
+| `--blender <path>` / `-Blender <path>` | use a specific Blender. Given explicitly, it is never silently substituted — a bad path is an error |
+| `--system` / `-System` | use your system Python instead |
+| `BLENDER=<path>` / `$env:BLENDER` | same as `--blender` |
+| `--help` / `-?` | usage |
+
+### Why Blender's Python and not yours
+
+The add-on only ever executes inside Blender, which ships its own interpreter.
+On this machine the system Python is 3.13.3 and Blender's is 3.13.13 — close
+enough to lull you, far enough apart to matter. A stdlib module or syntax
+feature present in one and not the other passes locally and fails on a user's
+machine. Running against Blender's interpreter closes that gap, and costs
+nothing: the suite is `bpy`-free, so it needs Blender's *Python*, not Blender.
+
+pytest is installed into a git-ignored `.pytest-blender/` **in the repo, not
+inside the Blender install** — a Blender update, or a Steam "verify files",
+cannot remove it, and nothing under the Blender folder is modified. The path to
+Blender's interpreter is cached there too, so only the first run pays the
+Blender launch needed to ask where it lives.
+
+You can of course still just run pytest directly; it exercises the same tests
+against whatever Python is on your PATH:
 
 ```bash
 python -m pytest -q
 ```
 
-No Blender required. This is the one to run constantly while working.
+### Tests that need Blender itself
 
-### 2. The same suite, inside Blender
-
-The command above runs against *your system* Python. The add-on only ever
-executes inside Blender, which ships its own interpreter — so a stdlib module
-or syntax feature that exists in your Python but not in Blender's would pass
-here and fail on a user's machine. Running the suite inside Blender closes
-that gap.
-
-```bash
-blender --background --factory-startup --python tests/run_in_blender.py
-```
-
-Blender does not bundle pytest, so the first run tells you exactly how to get
-it, using the interpreter of whichever Blender you launched:
-
-```
-pytest is not available to this Blender.
-
-Install it once with:
-    "…/Blender/5.2/python/bin/python.exe" -m pip install --target "…/.pytest-blender" pytest
-```
-
-Copy that line, run it, then run the Blender command again:
-
-```
-pytest 9.1.1 on Python 3.13.13 (Blender's)
-repo: …/blender-descent3-plugin
-286 passed in 0.53s
-exit code 0
-```
-
-pytest lands in a git-ignored `.pytest-blender/` **in the repo, not inside the
-Blender install** — so a Blender update, or a Steam "verify files", cannot
-remove it, and nothing under the Blender folder is touched.
-
-Anything after a bare `--` goes straight to pytest:
-
-```bash
-blender --background --factory-startup --python tests/run_in_blender.py -- -k naming -v
-blender --background --factory-startup --python tests/run_in_blender.py -- tests/test_poformat.py
-```
-
-The script exits non-zero when a test fails, so it can be wired into CI.
-
-> **Finding your Blender executable.** Do not assume a path — installs differ by
-> source. On Windows a Steam build is typically under
-> `…/steamapps/common/Blender/blender.exe`; `install.sh --list` prints every
-> Blender it can find, along with the add-ons directory each one uses.
-
-### 3. The Blender-only integration tests
-
-These exercise the half pytest cannot reach — mesh building, materials, UV
-orientation, operator registration — by driving real Blender against a real
-model. Each is a standalone script that exits non-zero on failure:
+Mesh building, materials, UV orientation and operator registration only exist
+inside `bpy`, so those are driven through real Blender. Each is a standalone
+script that exits non-zero on failure:
 
 ```bash
 blender --background --factory-startup --python tests/blender/test_uv_roundtrip.py
@@ -353,17 +343,24 @@ the top-left and Blender at the bottom-left, so import negates V and export
 must negate it back — when only one side did, every exported texture came out
 mirrored.
 
-`test_material_reuse.py` guards the material-name-is-the-texture-ID contract:
-a second import must reuse an existing material rather than let Blender mint
+`test_material_reuse.py` guards the material-name-is-the-texture-ID contract: a
+second import must reuse an existing material rather than let Blender mint
 `Hull.001`, which export would otherwise write into the file as a texture no
 bitmap matches.
 
-They deliberately do *not* run under pytest — `tests/blender/conftest.py` sets
-`collect_ignore_glob` so a bare `pytest` does not try to import them without
-Blender. See the `blender-addon-testing` skill in `.claude/skills/` for the
-wider workflow.
+These deliberately do *not* run under pytest — `tests/blender/conftest.py` sets
+`collect_ignore_glob`, so a bare `pytest` does not try to import them without
+Blender.
 
-### 4. Validating the extension manifest
+There is also `tests/run_in_blender.py`, which runs the pytest suite *inside*
+Blender rather than beside it. `run_tests.sh` is faster and is what you want
+day to day; this one matters only if you add tests that themselves need `bpy`:
+
+```bash
+blender --background --factory-startup --python tests/run_in_blender.py
+```
+
+### Validating the extension manifest
 
 ```bash
 blender --command extension validate descent3_plugin
