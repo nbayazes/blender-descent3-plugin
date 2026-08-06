@@ -78,7 +78,11 @@ off/on) so the new code loads.
 
 ## Importing
 
-`File → Import → Descent 3 POF/OOF (.pof)`. Options in the file browser sidebar:
+`File → Import → Descent 3 POF/OOF (.pof)`.
+
+![The Descent 3 import dialog: a Blender file browser listing .OOF models, with Import Gun Points, Import Attach Points and Texture Folder in the right-hand sidebar](docs/images/import-dialog.png)
+
+Options live in the file browser sidebar:
 
 | Option | Description |
 |--------|-------------|
@@ -93,10 +97,19 @@ image textures.
 
 ## Exporting
 
-`File → Export → Descent 3 POF/OOF (.pof)`. Choose the POF version (v23.00 is
-Descent 3 retail), and whether to export only selected objects, gun points, and
-attach points. Material names are written to the model's texture table, so name
-your materials after the Descent 3 textures you want the faces to reference.
+`File → Export → Descent 3 POF/OOF (.pof)`.
+
+![The Descent 3 export dialog, with POF Version set to "From project config", plus Selected Only, Export Gun Points and Export Attach Points](docs/images/export-dialog.png)
+
+| Option | Description |
+|--------|-------------|
+| **POF Version** | Which format version to write. Leave it on *From project config* and the version in your `descent3.toml` applies; pick a specific one to override it for this export |
+| **Selected Only** | Export only the selected objects rather than every mesh in the file |
+| **Export Gun Points** | Write empties named with the gun prefix as GPNT gun points |
+| **Export Attach Points** | Write empties named with the attach prefix as ATCH attach points |
+
+Material names are written to the model's texture table, so name your
+materials after the Descent 3 textures you want the faces to reference.
 
 ## How textures are located
 
@@ -204,6 +217,36 @@ Supported extensions and their priority order default to `IMAGE_EXTENSIONS`
 in `descent3_plugin/texutil.py`, and a project can override them (see
 Settings below).
 
+## Seeing what the add-on is doing
+
+Most of what the add-on has to tell you — a texture it could not find, a
+material that looks like a Blender duplicate, a file that ends mid-chunk — is
+written to Blender's system console. The status bar only ever shows the last
+line, so open the console before investigating anything.
+
+`Window → Toggle System Console`
+
+![Blender's Window menu open, with the Toggle System Console item highlighted](docs/images/system-console.png)
+
+On Linux and macOS there is no menu item, because Blender is already attached
+to the terminal that launched it — start Blender from a terminal and the output
+appears there.
+
+Typical output for a healthy import:
+
+```
+[Descent3] Importing: C:\models\Hellion.oof
+[Descent3] v2300: 2 textures, 1 submodels; texture search: [...]
+[Descent3] textures 2/2 found
+```
+
+and for one that needs attention:
+
+```
+[descent3_plugin] WARNING Texture not found: Hull (searched [...])
+[descent3_plugin] WARNING Material 'Hull.001' looks like a Blender duplicate ...
+```
+
 ## Settings
 
 Settings live in one of three places, chosen by who owns the value.
@@ -243,6 +286,12 @@ are reported so a typo does not fail silently.
 `Edit → Preferences → Add-ons → Descent 3 POF/OOF`. These follow you between
 projects and stay out of anyone else's repository: your own texture library
 folder, and the viewport size of the gun and attach markers.
+
+![The add-on's preferences in Blender: a Textures panel with a Texture Library path, and a Viewport Markers panel with Gun Marker Size and Attach Marker Size](docs/images/addon-preferences.png)
+
+**Texture Library** is a fallback for textures you keep outside any one
+project — an extracted copy of the game's bitmaps, say. It is searched *last*,
+so it never overrides a texture that ships beside the model.
 
 Texture search order, most specific first:
 
@@ -442,6 +491,7 @@ descent3_plugin/      the add-on (install this folder)
   texutil.py            texture-path resolution helpers (no bpy)
 descent3_plugin/blender_manifest.toml   canonical version + extension metadata
 descent3.example.toml   documented template for a project config
+docs/images/            screenshots used by this README
 LICENSE                 GPL-3.0-or-later
 tests/                  pytest suite, mock data, and fixtures
 reference/              vendored Descent 3 engine sources (GPL-3, not installed)
