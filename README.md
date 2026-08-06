@@ -263,17 +263,111 @@ cannot disagree about a record's layout.
 ## Development
 
 The parsing/writing (`poformat.py`), math primitives (`mathutil.py`),
-texture-path logic (`texutil.py`), project `config.py` and shared
-`constants.py` have **no `bpy` dependency**. Neither does the package
-`__init__.py`, which defers its Blender imports into `register()` — so the
-whole package imports under plain Python and the suite runs without Blender:
+texture-path logic (`texutil.py`), naming rules (`naming.py`), project
+`config.py` and shared `constants.py` have **no `bpy` dependency**. Neither
+does the package `__init__.py`, which defers its Blender imports into
+`register()` — so the whole package imports under plain Python.
+
+`tests/test_package_import.py` guards that contract: it fails if a
+module-scope `import bpy` reappears in any of those modules.
+
+## Running the tests
+
+There are two tiers, and they cover different things.
+
+| Tier | Needs Blender? | Covers |
+|------|----------------|--------|
+| pytest suite | no | the `bpy`-free half: parsing, writing, naming, config, the version matrix |
+| `tests/blender/` scripts | yes | the half that only exists inside Blender: meshes, materials, UVs, operators |
+
+### 1. The pytest suite (fast)
 
 ```bash
 python -m pytest -q
 ```
 
-`tests/test_package_import.py` guards that contract: it fails if a
-module-scope `import bpy` reappears in any of those modules.
+No Blender required. This is the one to run constantly while working.
+
+### 2. The same suite, inside Blender
+
+The command above runs against *your system* Python. The add-on only ever
+executes inside Blender, which ships its own interpreter — so a stdlib module
+or syntax feature that exists in your Python but not in Blender's would pass
+here and fail on a user's machine. Running the suite inside Blender closes
+that gap.
+
+```bash
+blender --background --factory-startup --python tests/run_in_blender.py
+```
+
+Blender does not bundle pytest, so the first run tells you exactly how to get
+it, using the interpreter of whichever Blender you launched:
+
+```
+pytest is not available to this Blender.
+
+Install it once with:
+    "…/Blender/5.2/python/bin/python.exe" -m pip install --target "…/.pytest-blender" pytest
+```
+
+Copy that line, run it, then run the Blender command again:
+
+```
+pytest 9.1.1 on Python 3.13.13 (Blender's)
+repo: …/blender-descent3-plugin
+286 passed in 0.53s
+exit code 0
+```
+
+pytest lands in a git-ignored `.pytest-blender/` **in the repo, not inside the
+Blender install** — so a Blender update, or a Steam "verify files", cannot
+remove it, and nothing under the Blender folder is touched.
+
+Anything after a bare `--` goes straight to pytest:
+
+```bash
+blender --background --factory-startup --python tests/run_in_blender.py -- -k naming -v
+blender --background --factory-startup --python tests/run_in_blender.py -- tests/test_poformat.py
+```
+
+The script exits non-zero when a test fails, so it can be wired into CI.
+
+> **Finding your Blender executable.** Do not assume a path — installs differ by
+> source. On Windows a Steam build is typically under
+> `…/steamapps/common/Blender/blender.exe`; `install.sh --list` prints every
+> Blender it can find, along with the add-ons directory each one uses.
+
+### 3. The Blender-only integration tests
+
+These exercise the half pytest cannot reach — mesh building, materials, UV
+orientation, operator registration — by driving real Blender against a real
+model. Each is a standalone script that exits non-zero on failure:
+
+```bash
+blender --background --factory-startup --python tests/blender/test_uv_roundtrip.py
+blender --background --factory-startup --python tests/blender/test_material_reuse.py
+```
+
+`test_uv_roundtrip.py` guards UV orientation: Descent 3 puts the UV origin at
+the top-left and Blender at the bottom-left, so import negates V and export
+must negate it back — when only one side did, every exported texture came out
+mirrored.
+
+`test_material_reuse.py` guards the material-name-is-the-texture-ID contract:
+a second import must reuse an existing material rather than let Blender mint
+`Hull.001`, which export would otherwise write into the file as a texture no
+bitmap matches.
+
+They deliberately do *not* run under pytest — `tests/blender/conftest.py` sets
+`collect_ignore_glob` so a bare `pytest` does not try to import them without
+Blender. See the `blender-addon-testing` skill in `.claude/skills/` for the
+wider workflow.
+
+### 4. Validating the extension manifest
+
+```bash
+blender --command extension validate descent3_plugin
+```
 
 ### Versioning
 

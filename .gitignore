@@ -2,3 +2,9 @@
 /.idea
 __pycache__/
 *.pyc
+
+# pytest installed into the repo for running the suite inside Blender's Python
+# (see tests/run_in_blender.py). Deliberately not inside the Blender install, so
+# a Blender update cannot remove it.
+/.pytest-blender
+/.pytest_cache
