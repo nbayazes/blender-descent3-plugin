@@ -11,7 +11,7 @@ import logging
 import os
 from collections.abc import Sequence
 
-log = logging.getLogger(__name__)
+log = logging.getLogger(__package__)
 
 #: Image formats tried, in priority order, when a texture name has no
 #: extension. POF stores a bare name, so the extension has to be guessed;

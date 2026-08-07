@@ -24,7 +24,7 @@ from typing import BinaryIO
 
 from .mathutil import Vector3
 
-log = logging.getLogger(__name__)
+log = logging.getLogger(__package__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -50,8 +50,22 @@ OBJFILE_VERSION = 2300
 #: Divisor of the ``major * 100 + minor`` encoding.
 VERSION_MAJOR_SCALE = 100
 
-#: A header value below this is a bare major version from a pre-release tool
-#: and is scaled up by :data:`VERSION_MAJOR_SCALE` before use.
+#: A header value below this is a bare major version from a pre-release tool and
+#: is scaled up by :data:`VERSION_MAJOR_SCALE` before use.
+#:
+#: No file reaches the rest of the parser through that path, and none can: the
+#: largest value it can produce is ``17 * 100 = 1700``, which the
+#: :data:`MIN_OBJFILE_VERSION` check then rejects. The rescale is therefore dead
+#: in every sense except one -- it is dead in the engine too, and identically so.
+#: ``ReadNewModelFile`` (reference/polymodel.cpp:1288) tests ``version < 18``,
+#: multiplies by 100, logs "Old POF Version of %d fixed up to %d", and then
+#: refuses anything under ``PM_COMPATIBLE_VERSION``, which is 1807.
+#:
+#: Kept because this parser's job is to accept what the game accepts, and the
+#: two are easiest to check against each other when they are shaped the same. If
+#: pre-1807 files are ever meant to load, the constant to move is
+#: :data:`MIN_OBJFILE_VERSION` -- and the engine would have to move with it, or
+#: this add-on would open models Descent 3 will not.
 MAX_UNSCALED_VERSION = 18
 
 #: Above this version each SOBJ record carries a ``geometric_center`` vector.
@@ -221,6 +235,24 @@ COLOR_CHANNEL_MAX = 255
 #: Upper bound on a length-prefixed string before it is read. A corrupt or
 #: misaligned length would otherwise drive an enormous allocation.
 MAX_STRING_LENGTH = 10000
+
+#: Bytes in the smallest field a POF record is built from -- an ``int32``, a
+#: float, or one component of a vector. Element counts are bounds-checked
+#: against the bytes the stream still holds in multiples of this, so a call site
+#: can state a record's size as the number of fields it cannot be smaller than
+#: without repeating the record layout a second time.
+SIZEOF_FIELD = 4
+
+#: Highest index a SOBJ record may claim for itself. ``model.submodels`` is
+#: grown with ``None`` placeholders up to whatever index a record names, so an
+#: unchecked index is an allocation the *file* chooses: ``2**31 - 1``
+#: placeholders is tens of gigabytes of list. The engine's own ceiling is far
+#: lower -- ``MAX_SUBOBJECTS`` is 30 (polymodel_external.h:76) and a model above
+#: it is refused outright (polymodel.cpp:2044) -- but this parser stays
+#: deliberately looser than the game, so an over-built model can still be opened
+#: in Blender and cut down there. Past this, the field is corruption rather than
+#: ambition.
+MAX_SUBMODEL_INDEX = 4095
 
 #: Largest ``$rotate=`` spin rate accepted. Values outside ``0 < rate <= 20``
 #: leave :data:`SOF_ROTATE` unset, matching the engine's own range check.
@@ -651,6 +683,49 @@ class POFReader:
         s = data.decode("ascii", errors="replace")
         return s.rstrip("\x00")
 
+    def read_count(self, what: str, item_size: int = SIZEOF_FIELD) -> int:
+        """Read an element count, refusing one the stream could not supply.
+
+        A count comes straight off disk and then decides how many times a loop
+        runs and how long a list grows, which makes a corrupt value a liveness
+        problem rather than a data one: a negative count silently skips its
+        loop and leaves every later read misaligned, and an enormous one grinds
+        through allocations until the short read that finally stops it.
+        :meth:`read_string` bounds its length prefix for the same reason.
+
+        The ceiling is the file's own remaining size rather than a fixed limit,
+        so no legitimate model is ever refused for being large: ``n`` records of
+        at least ``item_size`` bytes cannot be stored in fewer than
+        ``n * item_size`` bytes, whatever the rest of the layout does.
+
+        Args:
+            what: What is being counted, e.g. ``"vertex"``. Appears in the error
+                message and nowhere else.
+            item_size: Smallest number of bytes one counted record can occupy,
+                normally written as a multiple of :data:`SIZEOF_FIELD`. It is a
+                floor, not the exact size -- the check exists to refuse
+                impossible counts, not to describe every record twice, and a
+                short read still catches whatever slips past it.
+
+        Returns:
+            The count, non-negative and small enough that the remaining bytes
+            could hold that many records.
+
+        Raises:
+            ValueError: If the count is negative, or larger than the bytes left
+                in the stream could supply.
+        """
+        count = self.read_int32()
+        if count < 0:
+            raise ValueError(f"Invalid {what} count: {count}")
+        remaining = self.bytes_remaining()
+        if count > remaining // item_size:
+            raise ValueError(
+                f"Invalid {what} count: {count} needs at least "
+                f"{count * item_size} bytes, but {remaining} remain"
+            )
+        return count
+
     def read_color_rgb(self) -> Color:
         """Read three bytes as a :class:`Color` with 0..1 components."""
         r = self.read_uint8()
@@ -663,12 +738,36 @@ class POFReader:
     def read_chunk_header(self) -> tuple[int, int]:
         """Read a chunk header.
 
+        The sign is checked here rather than left to the caller because a
+        negative length is not merely bad data. :func:`parse_pof_stream` reaches
+        the next header by seeking to ``chunk_start + length``, so a negative one
+        seeks *backwards* onto the header it just read and the loop spins on it
+        forever -- pinning Blender's main thread at 100% CPU with no progress and
+        nothing to cancel, until the user kills Blender and loses whatever was
+        unsaved. There is no reading of the file that survives it: the offset the
+        loop is driven by is the very thing that is wrong.
+
+        A length merely running *past the end* is a different animal and is
+        deliberately not refused here, because whether it matters depends on
+        what the chunk is -- and this method does not know. Refusing it outright
+        turned a good model with a few junk bytes on the end into a file that
+        would not import at all. :func:`parse_pof_stream` makes that call
+        instead, with the chunk ID in hand.
+
         Returns:
             A ``(chunk_id, data_length)`` pair. The length excludes the eight
-            header bytes just consumed.
+            header bytes just consumed and is non-negative. It is *not* promised
+            to fit in the stream.
+
+        Raises:
+            ValueError: If the length is negative.
+            EOFError: If fewer than eight bytes remain. Callers use this to
+                detect the end of the chunk list.
         """
         chunk_id = self.read_uint32()
         length = self.read_int32()
+        if length < 0:
+            raise ValueError(f"Invalid chunk length: {length}")
         return chunk_id, length
 
     def skip(self, n: int) -> None:
@@ -805,14 +904,34 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
             here afterwards, so trailing fields this parser ignores are skipped
             rather than mistaken for the next chunk.
 
+    Raises:
+        ValueError: If the record's own index is outside ``0`` ..
+            :data:`MAX_SUBMODEL_INDEX`, or if one of its element counts claims
+            more data than the file holds.
+        EOFError: If the record is truncated.
+
     Note:
         The submodel is stored at ``model.submodels[sm.index]``, growing the
         list with ``None`` placeholders as needed, because SOBJ chunks can
         arrive out of order. :func:`parse_pof_stream` drops any placeholder that
         is still unfilled once every chunk has been read.
+
+        That storage is why the index is validated before anything else is
+        read. A negative index does not raise in Python, it *quietly
+        overwrites*: ``while len(model.submodels) <= -1`` never runs, and
+        ``model.submodels[-1] = sm`` replaces the last submodel parsed. Nothing
+        is left behind for the missing-placeholder warning to notice, so the
+        import reports the wrong submodel count, one subobject vanishes, and its
+        children fall back to no parent -- a turret sitting detached at the
+        model origin with not a word said about it.
     """
     sm = Submodel()
     sm.index = reader.read_int32()
+    if not 0 <= sm.index <= MAX_SUBMODEL_INDEX:
+        raise ValueError(
+            f"Invalid submodel index: {sm.index} "
+            f"(expected 0..{MAX_SUBMODEL_INDEX})"
+        )
     sm.parent = reader.read_int32()
     sm.normal = reader.read_vector3()
     _d = reader.read_float()  # separation plane d, not used
@@ -833,12 +952,12 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     sm.movement_axis = reader.read_int32()
 
     # Skip freespace chunks
-    n_chunks = reader.read_int32()
+    n_chunks = reader.read_count("freespace chunk", SIZEOF_FIELD)
     for _ in range(n_chunks):
         reader.read_int32()
 
     # Vertices
-    n_verts = reader.read_int32()
+    n_verts = reader.read_count("vertex", SIZEOF_FIELD * 3)
     for _ in range(n_verts):
         pos = reader.read_vector3()
         sm.vertices.append(SubmodelVertex(position=pos))
@@ -854,11 +973,11 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
                 model.flags |= PMF_ALPHA
 
     # Faces
-    n_faces = reader.read_int32()
+    n_faces = reader.read_count("face", SIZEOF_FIELD * 3)
     for _ in range(n_faces):
         face = ModelFace()
         face.normal = reader.read_vector3()
-        n_fv = reader.read_int32()
+        n_fv = reader.read_count("face vertex", SIZEOF_FIELD * 3)
         textured = reader.read_int32()
         if textured:
             face.textured = True
@@ -947,7 +1066,9 @@ def parse_pof(data: bytes) -> POFModel:
         The parsed model, with its hierarchy already built.
 
     Raises:
-        ValueError: If the magic bytes or version are not acceptable.
+        ValueError: If the magic bytes or version are not acceptable, or if the
+            data declares a size it does not hold; see
+            :func:`parse_pof_stream`.
         EOFError: If the data is truncated.
     """
     stream = io.BytesIO(data)
@@ -959,19 +1080,36 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
 
     Chunks are dispatched by ID; an unrecognised chunk is skipped by seeking to
     the end offset its own header declares, so an unfamiliar chunk costs data
-    but does not desynchronise the stream.
+    but does not desynchronise the stream. Because that offset comes from the
+    file, every size this loop trusts is bounds-checked first -- see
+    :meth:`POFReader.read_chunk_header` and :meth:`POFReader.read_count`.
+
+    The ways a size can be wrong get different answers, because they are not the
+    same problem. A size that would send the loop *backwards* is refused
+    outright: the loop is driven by those offsets, so guessing at a repair means
+    guessing where the next header is, and guessing wrong is what turned a bad
+    length into an unkillable spin. A size that runs off the end of the file
+    depends on whose chunk it is -- an unrecognised chunk is only ever skipped
+    over, so a body that is not there simply ends the chunk list with a warning
+    and everything already read is still a model; a chunk this parser does read
+    raises instead, because half a submodel record is not a submodel.
 
     Args:
         stream: Readable, seekable stream positioned at the file header.
 
     Returns:
-        The parsed model, with its hierarchy already built.
+        The parsed model, with its hierarchy already built. A file that ends
+        early, or that carries a tail which cannot be read as a chunk, yields
+        everything up to that point rather than nothing at all; the warning log
+        says where reading stopped.
 
     Raises:
-        ValueError: If the magic bytes do not match :data:`POF_MAGIC`, or the
+        ValueError: If the magic bytes do not match :data:`POF_MAGIC`, if the
             version falls outside :data:`MIN_OBJFILE_VERSION` ..
-            :data:`OBJFILE_VERSION`.
-        EOFError: If a chunk runs past the end of the stream.
+            :data:`OBJFILE_VERSION`, if a chunk length is negative, or if a
+            submodel index or an element count describes more data than the file
+            holds.
+        EOFError: If the file ends in the middle of a record.
     """
     reader = POFReader(stream)
     model = POFModel()
@@ -1011,11 +1149,22 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             # model is silently missing whatever those chunks held.
             reader.seek(pos)
             trailing = reader.bytes_remaining()
-            if trailing:
+            if trailing > 0:
                 log.warning(
                     "File ends mid-chunk-header: %d trailing byte(s) after the "
                     "last complete chunk. The file is truncated and anything "
                     "past this point was not read.", trailing,
+                )
+            elif trailing < 0:
+                # The previous chunk declared a body reaching past the end of
+                # the file and was read anyway -- it needed less of that body
+                # than it claimed -- so the seek to its end landed beyond EOF.
+                # Reporting that as "-40 trailing bytes" is worse than saying
+                # nothing; what the user needs to know is the same truncation.
+                log.warning(
+                    "The last chunk's declared body runs %d byte(s) past the "
+                    "end of the file. It is truncated and anything past this "
+                    "point was not read.", -trailing,
                 )
             break
 
@@ -1027,12 +1176,12 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             model.radius = reader.read_float()
             model.min_bound = reader.read_vector3()
             model.max_bound = reader.read_vector3()
-            n_detail = reader.read_int32()
+            n_detail = reader.read_count("detail level", SIZEOF_FIELD)
             for _ in range(n_detail):
                 reader.read_int32()  # skip detail indices
 
         elif chunk_id == CHUNK_TXTR:
-            n_textures = reader.read_int32()
+            n_textures = reader.read_count("texture", SIZEOF_FIELD)
             model.textures = []
             for _ in range(n_textures):
                 name = reader.read_string()
@@ -1042,7 +1191,7 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             _parse_subobj(reader, model, chunk_end)
 
         elif chunk_id == CHUNK_GPNT:
-            n_guns = reader.read_int32()
+            n_guns = reader.read_count("gun bank", SIZEOF_FIELD * 6)
             model.gun_banks = []
             for _ in range(n_guns):
                 bank = GunBank()
@@ -1053,16 +1202,16 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 model.gun_banks.append(bank)
 
         elif chunk_id == CHUNK_WBS:
-            n_wb = reader.read_int32()
+            n_wb = reader.read_count("weapon battery", SIZEOF_FIELD * 2)
             model.weapon_batteries = []
             for _ in range(n_wb):
                 wb = WeaponBattery()
-                n_gps = reader.read_int32()
+                n_gps = reader.read_count("battery gunpoint", SIZEOF_FIELD)
                 for j in range(n_gps):
                     gp = reader.read_int32()
                     if j < MAX_WB_GUNPOINTS:
                         wb.gunpoints.append(gp)
-                n_turrets = reader.read_int32()
+                n_turrets = reader.read_count("battery turret", SIZEOF_FIELD)
                 for j in range(n_turrets):
                     t = reader.read_int32()
                     if j < MAX_WB_TURRETS:
@@ -1072,13 +1221,15 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         elif chunk_id in (CHUNK_ANIM, CHUNK_RANI):
             nframes = 0
             if not timed:
-                nframes = reader.read_int32()
+                nframes = reader.read_count("animation frame", SIZEOF_FIELD * 4)
 
             for i, sm in enumerate(model.submodels):
                 if sm is None:
                     continue
                 if timed:
-                    sm.num_key_angles = reader.read_int32()
+                    sm.num_key_angles = reader.read_count(
+                        "rotation key", SIZEOF_FIELD * 4
+                    )
                     sm.rot_track_min = reader.read_int32()
                     sm.rot_track_max = reader.read_int32()
                     if sm.rot_track_min < model.frame_min:
@@ -1103,13 +1254,15 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         elif chunk_id == CHUNK_PANI:
             nframes = 0
             if not timed:
-                nframes = reader.read_int32()
+                nframes = reader.read_count("animation frame", SIZEOF_FIELD * 3)
 
             for i, sm in enumerate(model.submodels):
                 if sm is None:
                     continue
                 if timed:
-                    sm.num_key_pos = reader.read_int32()
+                    sm.num_key_pos = reader.read_count(
+                        "position key", SIZEOF_FIELD * 3
+                    )
                     sm.pos_track_min = reader.read_int32()
                     sm.pos_track_max = reader.read_int32()
                     if sm.pos_track_min < model.frame_min:
@@ -1131,7 +1284,7 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                     kf.position = reader.read_vector3()
 
         elif chunk_id == CHUNK_GRND:
-            n_ground = reader.read_int32()
+            n_ground = reader.read_count("ground plane", SIZEOF_FIELD * 7)
             model.ground_planes = []
             for _ in range(n_ground):
                 bank = GunBank()
@@ -1141,7 +1294,7 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 model.ground_planes.append(bank)
 
         elif chunk_id == CHUNK_ATCH:
-            n_attach = reader.read_int32()
+            n_attach = reader.read_count("attach point", SIZEOF_FIELD * 7)
             model.attach_points = []
             for _ in range(n_attach):
                 ap = AttachPoint()
@@ -1151,6 +1304,11 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 model.attach_points.append(ap)
 
         elif chunk_id == CHUNK_NATH:
+            # Read plainly rather than through read_count: the equality test
+            # below is already the bound, since it accepts exactly one value --
+            # the number of ATCH points, which the file has already paid for in
+            # bytes. Anything else, negative or absurd, takes the tolerant path
+            # instead of failing an import over optional up-vectors.
             n_normals = reader.read_int32()
             if len(model.attach_points) == n_normals:
                 for i in range(n_normals):
@@ -1169,10 +1327,40 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 )
 
         else:
-            # Unknown chunk, skip to end
-            pass
+            # Unknown chunk: nothing to read, only somewhere to skip to. If that
+            # somewhere is past the end of the file there is no next chunk, so
+            # this is where the chunk list stops.
+            #
+            # A file arrives like this honestly -- padded, or carrying a few
+            # bytes of junk on the end that read as a header, or cut short by a
+            # failed copy -- and every chunk before it parsed. Refusing the whole
+            # model over a tail nothing depends on turned a file that imported
+            # completely into one that did not import at all. The over-run is
+            # only tolerable *here*, though: a chunk this parser understands has
+            # a body it actually needs, and reading half of one raises EOFError a
+            # few lines above rather than inventing the rest.
+            if chunk_len > reader.bytes_remaining():
+                log.warning(
+                    "Unreadable chunk at offset %d declares %d byte(s) of body "
+                    "with only %d left in the file. It is truncated, and "
+                    "anything past this point was not read.",
+                    pos, chunk_len, reader.bytes_remaining(),
+                )
+                break
 
-        # Ensure we're at the end of this chunk
+        # Ensure we're at the end of this chunk. Forward progress is checked
+        # rather than assumed, because it is the only thing that ends this loop:
+        # a chunk_end at or before the header this iteration started from sends
+        # the parser back to re-read that same header, forever, on Blender's
+        # main thread. read_chunk_header already refuses every length that could
+        # do that, so this is unreachable today and is here to stay unreachable
+        # -- it is what stops a future edit to that check from turning a corrupt
+        # file back into an unkillable Blender.
+        if chunk_end <= pos:
+            raise ValueError(
+                f"Chunk at offset {pos} ends at {chunk_end}, which is not "
+                f"forward progress"
+            )
         reader.seek(chunk_end)
 
     # Drop the placeholders left where a SOBJ index was never filled in. This
