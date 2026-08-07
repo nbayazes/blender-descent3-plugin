@@ -19,6 +19,12 @@
 #   ./run_tests.sh --system            use the system Python instead
 #   BLENDER=<path> ./run_tests.sh      same as --blender
 #
+# Without --blender or $BLENDER it looks on PATH, then in the locations
+# Blender's own installers use, then in every Steam library Steam itself has a
+# record of, then at whichever Blender the last run used. A portable build
+# unpacked somewhere of your own has to be named once; `./install.sh --list`
+# prints every Blender on this machine.
+#
 # pytest is installed on first use into .pytest-blender/ in this repo -- not
 # into the Blender install, so a Blender update cannot remove it.
 
@@ -26,6 +32,8 @@ set -u
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENDOR_DIR="$REPO_DIR/.pytest-blender"
+# Where the interpreter lookup is remembered between runs; see blender_python().
+CACHE_FILE="$VENDOR_DIR/.interpreter"
 BLENDER_EXE="${BLENDER:-}"
 USE_SYSTEM=0
 PYTEST_ARGS=()
@@ -44,7 +52,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --blender) shift; [ $# -gt 0 ] || { fail "--blender needs a path"; exit 2; }; BLENDER_EXE="$1" ;;
         --system)  USE_SYSTEM=1 ;;
-        -h|--help) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)         PYTEST_ARGS+=("$1") ;;
     esac
     shift
@@ -52,21 +60,101 @@ done
 
 # ------------------------------------------------------------- find Blender
 
-# Candidate Blender executables, most specific first. Deliberately a short list:
-# install.sh does exhaustive discovery, and `./install.sh --list` will print
-# every Blender it finds if the guesses here miss.
+# Windows paths arrive from the environment with backslashes, which glob
+# traversal handles unevenly; MSYS accepts either separator. install.sh carries
+# the same helper for the same reason.
+winpath() { printf '%s\n' "$1" | tr '\\' '/'; }
+
+# "ProgramFiles(x86)" cannot be referenced as a shell variable -- the parentheses
+# are not valid in a name -- so it is read out of the environment by hand.
+# install.sh carries this helper too, for the same one variable.
+win_env() {
+    line="$(env | grep -i "^$1=" | head -1)"
+    [ -n "$line" ] || return 1
+    winpath "${line#*=}"
+}
+
+# Every Steam library on this machine, one per line, read out of Steam's own
+# record of where they are: its install path, and the libraryfolders.vdf that
+# lists the rest. A literal /e/Steam/... used to head the candidate list below --
+# it found Blender for whoever added it, found nothing for anyone else, and made
+# the script look like it had searched when it had not. Asking Steam is the
+# opposite: it covers every drive without naming one. install.sh reads the same
+# two sources, in more detail.
+steam_libraries() {
+    case "$(uname -s)" in
+        Darwin*) roots="$HOME/Library/Application Support/Steam" ;;
+        MINGW*|MSYS*|CYGWIN*)
+            # reg.exe is reachable from Git Bash and beats guessing drives.
+            roots="$(reg.exe query 'HKCU\Software\Valve\Steam' //v SteamPath 2>/dev/null |
+                     tr -d '\r' |
+                     sed -n 's/.*SteamPath[[:space:]]*REG_SZ[[:space:]]*//p' | head -1)"
+            roots="$(winpath "$roots")
+$(win_env 'ProgramFiles(x86)' || echo 'C:/Program Files (x86)')/Steam
+$(win_env 'ProgramFiles' || echo 'C:/Program Files')/Steam
+C:/Steam"
+            ;;
+        *)  roots="$HOME/.steam/steam
+$HOME/.local/share/Steam
+$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" ;;
+    esac
+
+    printf '%s\n' "$roots" | while IFS= read -r root; do
+        [ -n "$root" ] && [ -d "$root" ] || continue
+        printf '%s\n' "$root"
+        # The vdf moved between Steam client versions, so both places are read.
+        for vdf in "$root/steamapps/libraryfolders.vdf" "$root/config/libraryfolders.vdf"; do
+            [ -f "$vdf" ] || continue
+            sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$vdf" |
+                sed 's|\\\\|/|g'
+        done
+    done
+}
+
+# Candidate Blender executables, most specific first. Every one is PATH, a
+# location an official Blender installer uses by default, or a Steam library
+# Steam itself named -- spelled out of $PROGRAMFILES/$LOCALAPPDATA/$HOME and the
+# registry, never a drive letter, never a path off one developer's machine.
+#
+# Deliberately still shorter than install.sh, which does the exhaustive
+# discovery (Flatpak, Snap, distro packages, portable builds) and prints what it
+# finds with `./install.sh --list` -- which is what the failure message points at.
 blender_candidates() {
     command -v blender 2>/dev/null
     for base in \
-        "/c/Program Files/Blender Foundation"/Blender*/blender.exe \
-        "/e/Steam/steamapps/common/Blender/blender.exe" \
-        "/c/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe" \
-        "$HOME/.steam/steam/steamapps/common/Blender/blender" \
+        "$(winpath "${PROGRAMFILES:-}")/Blender Foundation"/Blender*/blender.exe \
+        "$(winpath "${LOCALAPPDATA:-}")/Programs/Blender Foundation"/Blender*/blender.exe \
         /Applications/Blender.app/Contents/MacOS/Blender \
+        "$HOME/Applications/Blender.app/Contents/MacOS/Blender" \
         /usr/bin/blender /usr/local/bin/blender
     do
         [ -x "$base" ] && printf '%s\n' "$base"
     done
+    # .exe before the extensionless name, which is not the platform showing
+    # through: MSYS makes `test -x blender` true for a file called blender.exe,
+    # so the bare name would be reported and cached as a path that does not
+    # exist as spelled -- and run_tests.ps1 reads that same cache file.
+    steam_libraries | sort -u | while IFS= read -r library; do
+        for exe in "$library/steamapps/common/Blender/blender.exe" \
+                   "$library/steamapps/common/Blender/blender" \
+                   "$library/steamapps/common/Blender/Blender.app/Contents/MacOS/Blender"
+        do
+            [ -x "$exe" ] && printf '%s\n' "$exe"
+        done
+    done
+    cached_blender
+}
+
+# The Blender a previous run resolved an interpreter for. Tried last, so it only
+# ever rescues the case the searches above cannot reach -- a portable build
+# unpacked somewhere of the user's own -- and then only after --blender named it
+# once. Remembering the machine you are on is the honest version of the
+# hardcoded Steam path this list used to carry; assuming everyone shares it was
+# not, and neither was sweeping drive letters and calling that a search.
+cached_blender() {
+    exe="$(cache_line 1)" || return 0
+    [ -n "$exe" ] && [ -x "$exe" ] && printf '%s\n' "$exe"
+    return 0
 }
 
 find_blender() {
@@ -81,15 +169,27 @@ find_blender() {
 #
 # That costs a Blender launch, which is most of this script's runtime -- and
 # the whole point of talking to the interpreter directly is to avoid paying for
-# Blender startup. So the answer is cached, keyed by the executable it came
-# from, and re-derived whenever that changes or the cached path stops existing.
-CACHE_FILE="$VENDOR_DIR/.interpreter"
+# Blender startup. So the answer is cached in $CACHE_FILE, keyed by the
+# executable it came from, and re-derived whenever that changes or the cached
+# path stops existing.
+
+# Line <n> of the cache, or failure if there is no cache to read. run_tests.ps1
+# writes this same file, and Windows PowerShell's `Set-Content -Encoding utf8`
+# puts a BOM at the front of it, so line 1 read back raw is three invisible
+# bytes longer than the path it names -- the comparison below then never
+# matches and every run pays for a Blender launch it did not need.
+cache_line() {
+    [ -r "$CACHE_FILE" ] || return 1
+    line="$(sed -n "${1}p" "$CACHE_FILE" | tr -d '\r')"
+    bom=$'\xef\xbb\xbf'
+    printf '%s\n' "${line#"$bom"}"
+}
 
 blender_python() {
     exe="$1"
     if [ -r "$CACHE_FILE" ]; then
-        cached_exe="$(sed -n '1p' "$CACHE_FILE")"
-        cached_py="$(sed -n '2p' "$CACHE_FILE")"
+        cached_exe="$(cache_line 1)"
+        cached_py="$(cache_line 2)"
         if [ "$cached_exe" = "$exe" ] && [ -x "$cached_py" ]; then
             printf '%s\n' "$cached_py"
             return 0
@@ -126,9 +226,13 @@ else
     fi
     if [ -z "$exe" ]; then
         fail "could not find a Blender executable"
-        note "pass one with --blender <path>, set BLENDER=<path>,"
-        note "or run './install.sh --list' to see every Blender found"
-        note "or run './run_tests.sh --system' to use the system Python"
+        note "not on PATH, not in a standard install location, not in any Steam"
+        note "library, and no previous run to remember. Point this script at"
+        note "yours -- any one of:"
+        note "  ./run_tests.sh --blender /path/to/blender"
+        note "  BLENDER=/path/to/blender ./run_tests.sh"
+        note "  ./install.sh --list      # prints every Blender on this machine"
+        note "  ./run_tests.sh --system  # use the system Python instead"
         exit 1
     fi
     step "Blender: $exe"

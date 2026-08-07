@@ -12,7 +12,8 @@ keyframes.
 
 > **Important:** the add-on must be installed as a **package folder**, not as
 > loose files. It uses relative imports (`from . import poformat`), so all
-> nine modules have to sit together inside a `descent3_plugin/` directory:
+> eleven modules have to sit together inside a `descent3_plugin/` directory,
+> along with the manifest:
 >
 > ```
 > scripts/addons/descent3_plugin/
@@ -23,14 +24,18 @@ keyframes.
 >   ├── export_pof.py
 >   ├── import_pof.py
 >   ├── mathutil.py
+>   ├── naming.py
 >   ├── poformat.py
 >   ├── preferences.py
+>   ├── texexport.py
 >   └── texutil.py
 > ```
 >
 > If the `.py` files are dropped directly into `scripts/addons/`, Blender cannot
 > load the package — the import/export operators never register and Blender warns
-> that `poformat.py` is "missing `bl_info`".
+> that `poformat.py` is "missing `bl_info`". Leaving *one* module behind is
+> quieter and just as fatal: the add-on fails to import with a `ModuleNotFoundError`
+> naming a file you may not have known existed. Copy the folder, not its contents.
 
 ### Option 1 — install script (recommended)
 
@@ -88,12 +93,42 @@ Options live in the file browser sidebar:
 |--------|-------------|
 | **Import Gun Points** | Import gun-point markers as empty objects |
 | **Import Attach Points** | Import attach points as empty objects |
-| **Texture Folder** | Optional folder to search for texture images (see below). Leave empty to use only the model's own folder |
+| **Texture Folder** | Optional folder to search for texture images, ahead of everywhere else (see below). Leave it empty and the search falls back to the project's `descent3.toml`, the model's own folder, and your Texture Library preference |
 
 Imported textures show up as materials with an image texture wired into the
 Principled BSDF's Base Color. If a model looks flat/untextured in the viewport,
 switch viewport shading to **Material Preview** — *Solid* mode does not display
 image textures.
+
+**A material you already had is reused, never restyled.** One material per
+texture ID is what keeps a round trip honest, so if your scene already contains a
+material named after one of the model's textures, the import assigns that one
+rather than minting `Metal.001`. What it will *not* do is change it: a material
+this add-on did not create is used exactly as it arrives — nothing added to its
+node tree, nothing rewired — and the import tells you so, because the
+consequence is a model that shows up untextured. Delete or rename that material
+and re-import to get the model's own texture. (Materials the add-on created carry
+a `d3_addon_material` property, and *those* it does finish off with the image
+they were always meant to have. That is a separate mark from the `d3_texture`
+property below, deliberately: adoption records `d3_texture` on your material so
+its faces still export as the right texture, and if that doubled as the add-on's
+signature then a second import of the same model would treat your material as its
+own and restyle it after all.)
+
+Damaged files are imported as far as they go rather than refused. A face pointing
+at a vertex the submodel does not have is dropped, and so is anything Blender's
+own mesh validation rejects. Both are reported with the submodel named, so
+missing geometry is never silent. This is not tidiness: an out-of-range index or
+a face using one vertex twice is written into the mesh without complaint, and
+then kills Blender outright — an access violation, not a catchable error — the
+moment the model's normals are applied to it. Every unsaved edit in the session
+goes with it, not just the import.
+
+Gun and attach markers arrive as empties **aimed the way the file aims them**.
+The direction lives in the empty's rotation, which is the axis Blender draws a
+single-arrow empty's arrow along — so the arrow points where the gun fires, and
+rotating the empty changes it. Attach points that specify an up vector keep their
+roll as well.
 
 ## Exporting
 
@@ -104,13 +139,85 @@ image textures.
 | Option | Description |
 |--------|-------------|
 | **POF Version** | Which format version to write. Leave it on *From project config* and the version in your `descent3.toml` applies; pick a specific one to override it for this export |
-| **Selected Only** | Export only the selected objects rather than every mesh in the file |
+| **Selected Only** | Export only the selected objects rather than every mesh in the file. It bounds the gun and attach markers too, not just the meshes (see below) |
 | **Export Gun Points** | Write empties named with the gun prefix as GPNT gun points |
 | **Export Attach Points** | Write empties named with the attach prefix as ATCH attach points |
 | **Textures** | Also write each material's image beside the model. *None* by default; *From project config* uses `texture_format` from your `descent3.toml` |
 
+### What gets exported
+
+Each mesh object becomes a submodel, and Blender's object parenting becomes the
+model hierarchy. So does an *Empty* that came from a submodel with no geometry —
+a turret's pivot, which exists to carry `$rotate=` and to be the thing the engine
+turns its children about. Import records `pof_index` on it, and that property is
+what tells it apart from the other empties in your file; nothing else of yours is
+swept in.
+
+**Objects are exported as you see them.** Rotation, scale and modifiers are all
+applied: the exporter reads each object's evaluated mesh and world matrix, so
+what lands in the file is what the viewport shows. There is no need to apply
+transforms by hand first, and a mirrored or subdivided mesh exports subdivided.
+Normals go through the same transform, so a scaled object's lighting stays
+right.
+
+**Authored normals are kept.** Descent 3 stores one normal per vertex, and that
+is where import puts the file's normals — in Blender's custom split normals. Read
+back from there rather than from Blender's computed vertex normals, so a round
+trip returns the normals the model shipped with rather than the exporter's
+opinion of the shading. On a mesh carrying no custom normals the computed ones
+are used, which is the right answer for flat shading anyway.
+
+A submodel's `offset` is its world position relative to its parent's. The engine
+adds those offsets down the hierarchy without applying parent rotation
+(`MinMaxSubmodel` in `reference/polymodel.cpp`), so world-space deltas are what
+it expects — and the model's bounding box and radius are grown the same way,
+from every vertex plus the offsets accumulated above it.
+
+**Which gun and attach markers come along.** Exporting the whole file takes every
+marker in it, since every submodel in the file is in the model anyway. With
+**Selected Only**, a marker is included when it is *either* selected itself *or*
+parented to one of the exported objects — so selecting a hull brings the guns
+bolted to it without dragging in a second ship's markers from elsewhere in the
+same `.blend`. Markers are written in the order their names number them, not the
+order Blender stores them in, because a bank's index is what the game references.
+A marker whose parent is not being exported is attached to a root submodel and
+measured from *that* submodel's origin, which is where the engine measures from.
+Marker positions come from where the object actually sits in the viewport, not
+from its `location` field, which reads differently for anything parented with
+Ctrl+P. **Marker directions come from the empty's rotation** — where its arrow
+points is where the gun fires. A brand-new, unrotated empty therefore exports
+pointing straight up; turn it to aim it. (Every marker used to be written facing
+one fixed direction whatever you did, which is why a round trip once left every
+gun on a ship aimed the same way.)
+
+### Materials and texture names
+
 Material names are written to the model's texture table, so name your
 materials after the Descent 3 textures you want the faces to reference.
+
+A material the add-on imported also carries the texture ID it came from in a
+**`d3_texture` custom property**, and that wins over the name. It is what lets a
+model referencing both `metal` and `metal.001` — two real, distinct game bitmaps
+— survive a round trip: without it, export could not tell that pair apart from
+one material you duplicated in the outliner, and merged them.
+
+You can set `d3_texture` by hand (Material Properties → Custom Properties) to pin
+the export name of a material you authored yourself. A material with no such
+property still falls back to the old rule: a `.NNN` suffix is treated as a
+Blender duplicate and collapsed onto the original, but only when that original is
+actually in the scene, and you are warned when it happens.
+
+Materials are read from each object's **material slots**, so a slot switched from
+*Data* to *Object* linking exports the material the viewport shows rather than
+nothing at all.
+
+A texture ID is also the name of the file that holds it, so an ID that cannot be
+a filename — one containing a path separator, `..`, a drive letter, or a reserved
+Windows device name — is reported when the model is built, whether or not you
+asked for texture images. The ID is still written to the model unchanged, because
+rewriting it would point those faces at a different texture; what the warning
+tells you is that no image can ever be written for it or found for it on import.
+Rename the material, or give it a `d3_texture` property that is a plain name.
 
 ### Exporting textures
 
@@ -137,17 +244,44 @@ PNG and Targa are supported. Descent 3's native **OGF is not** — Blender canno
 encode it, and offering the option would produce files the game rejects; it
 lands when an encoder does.
 
-Two things happen quietly in your favour here:
+The image written for a material is the one **driving its Base Color**, followed
+back through whatever sits in between — a reroute, a Gamma, a Mix that fades a
+detail texture over a diffuse one — so the texture nearest the shader wins rather
+than whichever image node happens to come first in the tree.
+
+Some things happen quietly in your favour here:
 
 - An image whose source file is **already in the requested format is copied
-  byte-for-byte**. No re-encode, no quality loss, no colour management.
+  byte-for-byte** — unless you have unsaved edits, in which case it is
+  re-encoded so Texture Paint work is not silently left behind. No re-encode
+  otherwise, no quality loss, no colour management.
 - Anything that *is* converted has colour management neutralised first. Blender
   5.2 defaults its view transform to **AgX**, and the only API that genuinely
   converts formats renders through it — so textures would otherwise export
-  tone-mapped and washed out. Your scene's settings are restored afterwards.
+  tone-mapped and washed out.
+- The scene's **Output Properties** are neutralised alongside it. That panel's
+  colour mode and bit depth apply to the same encoder, so a scene set to RGB
+  would drop the alpha from every texture — a grate exporting solid, a canopy
+  exporting opaque, and nothing wrong with the file until the game reads it.
+  Textures are always written RGBA at 8 bits.
 
-A material with no image texture is reported rather than skipped silently, so a
-half-populated folder is never a surprise. Change the folder name with
+Your scene's settings are restored afterwards in every case.
+
+A texture whose image cannot be written is **reported rather than skipped
+silently**, so a half-populated folder is never a surprise. Three things get
+refused, each naming the texture:
+
+- a material with no image texture — there is nothing to write;
+- a texture ID that is not a usable filename — one containing a path separator
+  or `..`, an absolute path or drive letter, a Windows device name (`NUL`,
+  `COM1`, …), or a trailing dot or space. These are refused *before* the path is
+  built, because `os.path.join` discards the export folder entirely when handed
+  an absolute second argument, and export overwrites without asking;
+- an image whose source file has been moved or deleted since it was loaded.
+
+The `exported_textures/` folder is only created once a texture is actually
+written, so an export where everything was refused does not leave an empty
+folder behind implying otherwise. Change the folder name with
 `textures.export_dir`, and the default format with `export.texture_format`.
 
 **Import does not search this folder.** Exports stay sandboxed from the models
@@ -172,26 +306,33 @@ each name into an actual image file on disk.
 ### Search directories and their priority
 
 The importer builds an ordered list of directories to search, then looks each
-texture name up in them:
+texture name up in them. In priority order, most specific first:
 
-1. **Texture Folder** — if you entered one in the import options *and it exists*,
-   it is searched **first**.
-2. **The model's own directory** — the folder that contains the `.oof`/`.pof`
-   file you are importing (`os.path.dirname(os.path.abspath(filepath))`), always
-   searched, and always **last**.
+1. **Texture Folder** — the path you entered in the import options, if you
+   entered one *and it exists*.
+2. **`textures.search_dirs`** — every directory the project's `descent3.toml`
+   lists, in the order it lists them. Relative entries resolve against the config
+   file, not your working directory.
+3. **The model's own directory** — the folder holding the `.oof`/`.pof` you are
+   importing (`os.path.dirname(os.path.abspath(filepath))`). Always searched.
+4. **Texture Library** — the folder from your add-on preferences, if you set one
+   *and it exists*. Deliberately last, so a personal library never shadows a
+   texture that ships beside the model.
 
-The first directory that yields a match wins.
+The first directory that yields a match wins. Only entry 3 is unconditional —
+1, 2 and 4 drop out when you have not set them, and any of them that names a
+folder which does not exist is skipped with a warning on the console rather than
+failing the import. The list is also de-duplicated, so listing the model's own
+folder in `search_dirs` does not get it searched twice.
 
-### When no Texture Folder is provided (the default)
+The folder texture *export* writes into is **not** on this list. See
+[Exporting textures](#exporting-textures).
 
-With the **Texture Folder** field left empty, the search list contains exactly
-one entry: **the model's own directory**. In other words, the importer looks for
-each texture's image file *right next to the model file* and nowhere else.
+### How each directory is searched
 
-- The lookup directory is derived from the file you picked in the import dialog,
-  resolved to an absolute path. If you import
-  `D:\descent3\models\pyro.oof`, the texture directory is `D:\descent3\models\`.
-- Each texture **name** is treated as a **file stem** in that directory. The
+The same rules apply to every entry above, not just the model's own folder:
+
+- Each texture **name** is treated as a **file stem** in the directory. The
   importer appends each supported image extension, in this order, and uses the
   first file that exists:
 
@@ -210,12 +351,20 @@ each texture's image file *right next to the model file* and nowhere else.
   the exact-name step usually resolves it; the fallback matters on
   case-sensitive filesystems.)
 
-- The search is **not recursive** — only the model's immediate directory is
-  looked at, never its subfolders or parents.
+- The search is **not recursive** — only each directory itself is looked at,
+  never its subfolders or parents.
 
 - The comparison is **exact on the stem** (apart from case). A texture named
   `Hull` matches `Hull.png` but not `Hull_01.png`, `metal_Hull.png`, or
   `Hull.001.png`.
+
+### When nothing is configured (the default)
+
+With the **Texture Folder** field empty, no `descent3.toml`, and no Texture
+Library set, the list collapses to its one unconditional entry: **the model's
+own directory**, derived from the file you picked in the import dialog and
+resolved to an absolute path. Import `D:\descent3\models\pyro.oof` and the
+texture directory is `D:\descent3\models\`.
 
 **Practical consequence:** the simplest setup is to keep a model's `.oof` and all
 of its `.png` (or other supported) textures in one folder. Import the `.oof` from
@@ -230,11 +379,11 @@ Descent 3 assets extracted from `.hog` archives. The value you enter is:
 - Cleaned of surrounding whitespace and quotes (so a Windows
   *"Copy as path"* value like `"D:\tex\folder"` works when pasted).
 - Resolved with Blender's path rules (`//`-relative paths are made absolute).
-- Searched **before** the model's own directory, using the same per-directory
-  rules (exact extension order, then the case-insensitive fallback).
+- Searched **first**, ahead of everything else, using the same per-directory
+  rules described above.
 
 If the folder you enter does not exist, it is ignored (with a warning in the
-console) and the importer falls back to the model's own directory.
+console) and the importer carries on with the rest of the list.
 
 > The **Texture Folder** field is a plain text box you paste a path into — it has
 > no "browse" button. Blender only allows one file-selector dialog at a time, and
@@ -257,7 +406,10 @@ creates a material named after the texture — it just has no image attached
 
 ```
 for each texture name referenced by the model's faces:
-    for each directory in [Texture Folder (if set & exists), model directory]:
+    for each directory in [Texture Folder (if set & exists),
+                           textures.search_dirs from descent3.toml,
+                           model directory,
+                           Texture Library from preferences (if set & exists)]:
         try name + ".png", ".bmp", ".tga", ".jpg", ".jpeg", ".ogf", ".pcx"   → first hit wins
         else scan directory for a case-insensitive  name.<supported-ext>       → first hit wins
     if nothing matched anywhere:
@@ -294,9 +446,12 @@ Typical output for a healthy import:
 and for one that needs attention:
 
 ```
-[descent3_plugin] WARNING Texture not found: Hull (searched [...])
-[descent3_plugin] WARNING Material 'Hull.001' looks like a Blender duplicate ...
+[descent3_plugin] Texture not found: Hull (searched [...])
+[descent3_plugin] Material 'Hull.001' looks like a Blender duplicate ...
 ```
+
+Every module logs under the one `descent3_plugin` name, so that prefix is what
+to grep the console for — there is no per-module tag to guess at.
 
 ## Settings
 
@@ -374,6 +529,12 @@ does the package `__init__.py`, which defers its Blender imports into
 `tests/test_package_import.py` guards that contract: it fails if a
 module-scope `import bpy` reappears in any of those modules.
 
+The other four — `import_pof.py`, `export_pof.py`, `texexport.py` and
+`preferences.py` — import `bpy` at module scope and are exercised through real
+Blender instead; see [Tests that need Blender itself](#tests-that-need-blender-itself).
+Anything that can be expressed without `bpy` belongs on the first list, because
+that is the half a plain `pytest` run can cover.
+
 ## Running the tests
 
 ```bash
@@ -388,16 +549,25 @@ to run the suite, and installs pytest the first time if it is missing.
 ==> Blender: E:\Steam\steamapps\common\Blender\blender.exe
     Python 3.13.13  (E:\Steam\...\Blender\5.2\python\bin\python.exe)
 ==> Running tests
-286 passed in 0.53s
+518 passed in 1.58s
 ==> all tests passed
 ```
 
-Arguments go straight to pytest:
+Arguments go straight to pytest, including bare paths:
 
 ```bash
 ./run_tests.sh -k naming -v
 ./run_tests.sh tests/test_poformat.py
 ```
+
+```powershell
+.\run_tests.ps1 -k naming --verbose
+.\run_tests.ps1 tests\test_poformat.py
+```
+
+PowerShell binds `-v` to its own `-Verbose` before the script sees it, so pytest
+never receives that one — use `--verbose` or `-vv`. Everything else passes
+through.
 
 Other options:
 
@@ -407,6 +577,28 @@ Other options:
 | `--system` / `-System` | use your system Python instead |
 | `BLENDER=<path>` / `$env:BLENDER` | same as `--blender` |
 | `--help` / `-?` | usage |
+
+**How Blender is found.** No path is baked into the repo — the search is entirely
+derived from your environment, so it works the same on a machine that installed
+Blender somewhere the scripts have never heard of:
+
+1. `--blender` / `-Blender`, or `$BLENDER` / `$env:BLENDER`;
+2. `blender` on `PATH`;
+3. the roots Blender's own installer writes to, newest version first —
+   `$ProgramFiles` and `$LOCALAPPDATA` on Windows, `/Applications` on macOS,
+   `/usr/bin` on Linux;
+4. every Steam library, read from Steam's own record of them — its install path
+   in the registry (Windows) or under `$HOME` (Linux/macOS), plus every extra
+   library listed in `libraryfolders.vdf`;
+5. failing all of that, whichever Blender the last successful run used, which is
+   cached in `.pytest-blender/.interpreter`.
+
+Step 4 covers a Steam library on any drive without any drive being named — the
+scripts ask Steam rather than sweeping `C:` through `F:`, which is what they used
+to do and which found nothing for anyone whose library was on `G:`. Step 5 is
+then only for a portable build unpacked somewhere of your own, after you have
+named it with `--blender` once. If nothing is found, the error lists every way to
+point it at one; `./install.sh --list` enumerates every Blender on the machine.
 
 ### Why Blender's Python and not yours
 
@@ -445,6 +637,8 @@ blender --background --factory-startup --python-exit-code 1 \
         --python tests/blender/test_coordinate_system.py
 blender --background --factory-startup --python-exit-code 1 \
         --python tests/blender/test_texture_export.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_bad_geometry.py
 ```
 
 > **`--python-exit-code 1` is not optional.** Blender exits **0** when a script
@@ -462,6 +656,16 @@ second import must reuse an existing material rather than let Blender mint
 `Hull.001`, which export would otherwise write into the file as a texture no
 bitmap matches.
 
+`test_coordinate_system.py` guards everything that crosses the Y-up/Z-up
+boundary, including the parts that live on the object rather than in the mesh:
+world transforms, marker positions and directions, and the offsets that
+accumulate down a three-deep hierarchy.
+
+`test_bad_geometry.py` guards the damaged-file paths, and is the one test here
+whose regression is not a `FAIL` line — a face carrying an out-of-range index or
+a repeated vertex kills Blender with an access violation when the model's normals
+are applied, so a regression shows up as the process dying mid-output.
+
 These deliberately do *not* run under pytest — `tests/blender/conftest.py` sets
 `collect_ignore_glob`, so a bare `pytest` does not try to import them without
 Blender.
@@ -471,8 +675,15 @@ Blender rather than beside it. `run_tests.sh` is faster and is what you want
 day to day; this one matters only if you add tests that themselves need `bpy`:
 
 ```bash
-blender --background --factory-startup --python tests/run_in_blender.py
+blender --background --factory-startup --python-exit-code 1 \
+        --python tests/run_in_blender.py
 ```
+
+The flag belongs here too. This script does exit non-zero when a test fails —
+it calls `sys.exit()` with pytest's own code, and Blender honours an explicit
+exit code either way — but it cannot report a failure it never reached. Without
+the flag, a collection error or an import that blows up before `main()` runs
+exits 0 and reads as a clean suite.
 
 ### Validating the extension manifest
 
@@ -540,16 +751,58 @@ Decisions that are not obvious from the code, and the reasoning behind them.
 - **Hierarchy becomes parenting.** The submodel tree maps onto Blender object
   parenting; submodels are keyed by their own index rather than list position,
   because SOBJ chunks can arrive out of order or with gaps.
-- **Custom properties carry what Blender cannot represent.** Submodel flags,
-  movement type and axis, and the raw property string are stored on the object
-  so a round trip does not lose commands the add-on does not itself interpret.
+- **Custom properties carry what Blender cannot represent.** Movement type and
+  axis, and the raw `$rotate=` / `$fov=` property string, are stored on the
+  object so a round trip does not lose commands the add-on does not itself
+  interpret. The `SOF_*` flag bits are stored too (`pof_flags`) but are not
+  written back: the SOBJ record has no flag word, and both the engine and this
+  add-on's reader derive every bit from the property string — so preserving that
+  string verbatim is what carries the flags across.
+  A material carries `d3_texture`, the Descent 3 texture ID it stands for. The
+  material's *name* says the same thing until Blender renames the datablock or
+  the user does, and a name is a guess where the property is evidence — which is
+  what stops `metal` and `metal.001` being merged into one texture on export.
+  Materials the add-on *created* carry a second mark, `d3_addon_material`, and
+  that is the one that grants import permission to restyle them. Two properties
+  rather than one because they answer different questions: import records
+  `d3_texture` on a user's material too, so its faces export correctly, and if
+  that also meant "mine to edit" then the next import would edit it.
+  An attach-point empty carries `pof_has_uvec`, meaning the file fixed its roll
+  rather than leaving it undefined; without it, export would write an up vector
+  for every attach point and invent a constraint the model never had.
+  An object carries `pof_name`, the name its submodel had in the file, for the
+  same reason a material carries `d3_texture`: a POF may hold two submodels
+  called `Wing` and Blender may not, so the second object becomes `Wing.001` and
+  that suffix must not reach the model. Rename the object and the rename wins —
+  the recorded name is only preferred while the object still wears it.
+- **A submodel with no geometry becomes an Empty, and exports as one.** That is
+  how Descent 3 spells a joint: a turret's pivot has no vertices, it carries the
+  `$rotate=` the engine turns its children with. Exporting only meshes dropped it
+  and re-rooted the turret onto the hull, which looks identical in Blender and
+  stops the turret moving in the game. An Empty joins the model by carrying
+  `pof_index`, which is also how you can promote one you made by hand; every
+  other empty in your file is left alone.
+- **Export reads evaluated objects, not raw mesh data.** Object transforms and
+  modifiers are applied on the way out, because the alternative silently ships
+  something other than what the viewport shows. Material slots are read off the
+  evaluated object too, so a slot a Boolean or a Geometry Nodes tree introduced
+  is a texture the model uses rather than faces exported flat grey. Submodel
+  offsets are world-space deltas from the parent, which is what the engine's own
+  hierarchy walk expects: it sums them as plain vector adds without applying
+  parent rotation. An object whose transform mirrors — a wing duplicated and
+  scaled `-1` — has each face's corners written in reverse, because a mirror
+  reverses orientation and the winding would otherwise contradict the normals
+  stored beside it.
 - **Round-trip fidelity is the correctness bar.** Import then export should
   produce an equivalent file. This is enforced by
   `tests/test_version_features.py`, which round-trips a model at every version
   where the record layout changes.
 - **Gun and attach points are empties matched by name prefix.** That makes the
   prefix a contract between import and export, which is why it is configurable
-  in one place both halves read (see Settings).
+  in one place both halves read (see Settings). The number after the prefix is a
+  contract too, and export sorts on it: a gun bank's index is what WBAT cites and
+  what the game bolts hardware to, while `bpy.data.objects` is sorted as text and
+  would put `Gun_10` between `Gun_1` and `Gun_2`.
 
 ## Repository layout
 
@@ -558,16 +811,22 @@ descent3_plugin/      the add-on (install this folder)
   __init__.py           registration and menu entries (no bpy at import time)
   import_pof.py         ImportPOF operator and POF -> Blender conversion
   export_pof.py         ExportPOF operator and Blender -> POF conversion
+  texexport.py          writing texture images beside an exported model
   config.py             per-project descent3.toml settings (no bpy)
   preferences.py        per-user add-on preferences
   constants.py          values shared by the import and export halves (no bpy)
   mathutil.py           Vector3 and math helpers (no bpy)
+  naming.py             material-name to texture-ID rules (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
-descent3_plugin/blender_manifest.toml   canonical version + extension metadata
+  blender_manifest.toml canonical version + extension metadata
 descent3.example.toml   documented template for a project config
+install.ps1 install.sh  find every Blender and deploy the package folder
+run_tests.sh run_tests.ps1   run pytest under Blender's own Python
 docs/images/            screenshots used by this README
 LICENSE                 GPL-3.0-or-later
 tests/                  pytest suite, mock data, and fixtures
 reference/              vendored Descent 3 engine sources (GPL-3, not installed)
+.claude/skills/         reference notes for the headless test workflow and the
+                        binary format
 ```

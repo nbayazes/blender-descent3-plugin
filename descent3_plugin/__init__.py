@@ -22,8 +22,10 @@ bl_info = {
     "category": "Import-Export",
 }
 
+import ast
 import importlib
 import logging
+import os
 import sys
 
 log = logging.getLogger(__name__)
@@ -33,27 +35,133 @@ log = logging.getLogger(__name__)
 from . import constants
 
 #: Submodules that import ``bpy``, in registration order. Each exposes a
-#: ``classes`` tuple of the bpy types it wants registered.
+#: ``classes`` tuple of the bpy types it wants registered. Deliberately written
+#: out rather than derived: a module missing from here loses its operators
+#: outright, so which modules register -- and in what order -- is a decision
+#: worth stating. :func:`_submodules` says so out loud if a module defines
+#: ``classes`` without being named here. The reload order below is derived
+#: instead, because a module missing from *that* changes nothing visible, which
+#: is precisely how ``texexport`` stayed off it for so long.
 _SUBMODULE_NAMES = ("preferences", "import_pof", "export_pof")
-
-#: Modules reloaded when the add-on is re-enabled, in dependency order. The
-#: bpy-free modules come first: every module here copies values out of the ones
-#: it imports with ``from .x import ...`` at import time, so reloading a
-#: dependency after its dependents would leave them holding stale values.
-_RELOAD_NAMES = (
-    "constants",
-    "mathutil",
-    "naming",
-    "texutil",
-    "poformat",
-    "config",
-) + _SUBMODULE_NAMES
 
 #: Exactly the classes :func:`register` installed, so :func:`unregister` removes
 #: those same objects. Re-deriving them from ``sys.modules`` risks unregistering
 #: a fresh class object, which Blender rejects with "not the registered object"
 #: after the menu entries have already been stripped.
 _registered = []
+
+
+def _scan_package() -> tuple[dict[str, set[str]], set[str]]:
+    """Read the package folder to find out what it contains.
+
+    The reload list this feeds used to be written out by hand, and it quietly
+    rotted: ``texexport`` was never added to it, so an edited ``texexport.py``
+    kept running its previous code after toggling the add-on off and on -- the
+    exact workflow :func:`_submodules` exists to preserve. Nothing fails when
+    that list is wrong, which is why nobody noticed for so long. Reading the
+    folder instead means it cannot go wrong again: a new module is picked up the
+    moment it lands next to this file.
+
+    The modules are parsed with :mod:`ast`, never imported. Importing them here
+    would defeat the deferral that keeps ``import descent3_plugin`` working
+    without Blender, and would drag ``bpy`` into a package that promises not to
+    touch it outside :func:`register`.
+
+    Returns:
+        An ``(imports, with_classes)`` pair. ``imports`` maps every sibling
+        module's name to the set of sibling modules it imports; ``with_classes``
+        holds the names of the modules that define a module-level ``classes``
+        tuple, i.e. the ones that have bpy types to register.
+    """
+    directory = os.path.dirname(os.path.abspath(__file__))
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError as e:
+        # Survivable: a package folder that cannot be listed is one that cannot
+        # be reloaded, and running the already-imported code is a far better
+        # outcome than refusing to register at all.
+        log.warning("Could not read %s to plan the reload: %s", directory, e)
+        return {}, set()
+
+    names = [e[:-3] for e in entries if e.endswith(".py") and e != "__init__.py"]
+    imports = {name: set() for name in names}
+    with_classes = set()
+
+    for name in names:
+        path = os.path.join(directory, f"{name}.py")
+        try:
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+        except (OSError, SyntaxError, ValueError) as e:
+            # Keep the module in the reload set with no recorded dependencies.
+            # Reloading it in a suboptimal position is recoverable; leaving it
+            # out is the failure this whole mechanism exists to prevent, and a
+            # module that really is broken raises on reload, which is loud.
+            log.warning("Could not scan %s.py, assuming no dependencies: %s", name, e)
+            continue
+
+        # Every relative import in the file, not just the module-scope ones: a
+        # dependency imported inside a function is still a dependency, and a
+        # missed edge is a wrong reload order.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level != 1:
+                continue
+            if node.module is None:
+                # ``from . import poformat`` -- the siblings are the names.
+                imports[name].update(a.name for a in node.names if a.name in imports)
+            elif node.module in imports:
+                # ``from .poformat import POFModel``
+                imports[name].add(node.module)
+
+        # Module scope only, because that is the only place register() looks.
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "classes"
+                for target in node.targets
+            ):
+                with_classes.add(name)
+
+    return imports, with_classes
+
+
+def _reload_order(imports: dict[str, set[str]]) -> tuple[str, ...]:
+    """Order the package's modules so a dependency is always reloaded first.
+
+    ``from .x import NAME`` binds the value, not the module, so every module
+    holds copies of whatever its dependencies exported at import time. Reloading
+    a dependency *after* its dependents therefore leaves them holding the values
+    from before the edit -- a failure that shows up as code behaving the way it
+    did two saves ago, with nothing to point at.
+
+    Args:
+        imports: Module name -> the sibling modules it imports, as returned by
+            :func:`_scan_package`.
+
+    Returns:
+        Every name in ``imports``, each preceded by everything it imports.
+        Modules that do not depend on each other come out alphabetically, so the
+        order is stable between runs.
+    """
+    pending = {name: set(deps) for name, deps in imports.items()}
+    ordered = []
+    while pending:
+        ready = sorted(name for name, deps in pending.items() if not deps)
+        if not ready:
+            # An import cycle has no correct reload order at all, and Python
+            # tolerates some of them at run time, so break it deterministically
+            # rather than dropping the modules involved on the floor.
+            ready = [min(pending)]
+            log.warning(
+                "Import cycle among %s; reloading %s first, which may leave "
+                "stale values behind",
+                ", ".join(sorted(pending)), ready[0],
+            )
+        ordered.extend(ready)
+        for deps in pending.values():
+            deps.difference_update(ready)
+        for name in ready:
+            del pending[name]
+    return tuple(ordered)
 
 
 def _submodules(reload_first: bool = False) -> list:
@@ -64,6 +172,11 @@ def _submodules(reload_first: bool = False) -> list:
     stale code after toggling the add-on off and on in Preferences. Reloading
     explicitly at register time preserves that workflow.
 
+    What gets reloaded is read off the package folder by :func:`_scan_package`
+    rather than listed by hand. Only modules that are already in
+    ``sys.modules`` are reloaded, so this never imports anything -- and never
+    pulls ``bpy`` in -- that was not loaded already.
+
     Args:
         reload_first: Reload already-imported modules rather than reusing them.
 
@@ -71,7 +184,21 @@ def _submodules(reload_first: bool = False) -> list:
         The submodule objects named by :data:`_SUBMODULE_NAMES`, in order.
     """
     if reload_first:
-        for name in _RELOAD_NAMES:
+        imports, with_classes = _scan_package()
+
+        # A module that declares ``classes`` but is missing from
+        # _SUBMODULE_NAMES is never registered: its operators simply do not
+        # exist, and Blender reports nothing at all. The fix is one word in the
+        # tuple above, so name the module rather than let it fail in silence.
+        unregistered = sorted(with_classes.difference(_SUBMODULE_NAMES))
+        if unregistered:
+            log.warning(
+                "%s define bpy classes but are missing from _SUBMODULE_NAMES, "
+                "so nothing they declare is registered",
+                ", ".join(unregistered),
+            )
+
+        for name in _reload_order(imports):
             module = sys.modules.get(f"{__name__}.{name}")
             if module is not None:
                 importlib.reload(module)

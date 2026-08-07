@@ -29,12 +29,19 @@
 set -u
 
 ADDON_ID="descent3_plugin"
-REQUIRED_FILES="__init__.py config.py constants.py export_pof.py import_pof.py mathutil.py naming.py poformat.py preferences.py texexport.py texutil.py"
-# Non-.py files that must also be installed. blender_manifest.toml is the
-# canonical version and is what Blender 4.2+ reads to treat the folder as an
-# extension; the previous manifest sat in the repo unshipped because the copy
-# step globbed '*.py' only.
-DATA_FILES="blender_manifest.toml"
+# The two files whose absence means this is not the add-on source at all:
+# __init__.py is what makes the folder a package (the add-on uses
+# `from . import poformat`), and blender_manifest.toml is what Blender 4.2+
+# reads to treat the folder as an extension -- it sat in the repo unshipped for
+# its whole life because the copy step globbed '*.py' only.
+#
+# Everything else that ships is read off the package folder by package_files()
+# rather than restated here. A hardcoded module list is a second copy of the
+# package contents, and the copy that goes stale is always the one that quietly
+# stops installing the module nobody remembered to add to it.
+CRITICAL_FILES="__init__.py blender_manifest.toml"
+# Filled in by check_source(): every file the add-on ships, one per line.
+PACKAGE_FILES=""
 # Package folder names this add-on used to ship under. They declare the same
 # operator bl_idnames, so leaving one in place next to the new folder gives the
 # user two File > Import entries and lets Blender pick either one.
@@ -119,18 +126,32 @@ script_dir() {
 
 SOURCE_DIR="$(script_dir)/$ADDON_ID"
 
+# Everything the add-on ships: the whole package folder as it stands, which is
+# the only description of it that cannot drift. Subdirectories are skipped
+# (__pycache__ is the only one that ever appears, and stale bytecode is exactly
+# what must not travel), as is loose bytecode. Prints one name per line; module
+# and data filenames never contain whitespace, so callers can word-split it.
+package_files() {
+    for path in "$SOURCE_DIR"/*; do
+        [ -f "$path" ] || continue
+        case "$path" in *.pyc) continue ;; esac
+        basename "$path"
+    done
+}
+
 check_source() {
     if [ ! -d "$SOURCE_DIR" ]; then
         fail "add-on source folder not found: $SOURCE_DIR"
         fail "run this script from the repository root"
         exit 1
     fi
-    for f in $REQUIRED_FILES; do
+    for f in $CRITICAL_FILES; do
         if [ ! -f "$SOURCE_DIR/$f" ]; then
             fail "add-on source is incomplete -- missing $f in $SOURCE_DIR"
             exit 1
         fi
     done
+    PACKAGE_FILES="$(package_files)"
 }
 
 # blender_manifest.toml is the single source of truth for the version;
@@ -391,7 +412,8 @@ install_addon() {
 
     # Loose .py files directly in scripts/addons break the package import and make the
     # operators silently fail to register. Flag them; --clean removes them.
-    for f in $REQUIRED_FILES; do
+    for f in $PACKAGE_FILES; do
+        case "$f" in *.py) ;; *) continue ;; esac
         [ -f "$addons_dir/$f" ] || continue
         if [ "$OPT_CLEAN" -eq 1 ] && [ "$OPT_DRYRUN" -eq 0 ]; then
             rm -f "$addons_dir/$f"
@@ -427,11 +449,8 @@ install_addon() {
 
     if [ "$OPT_DRYRUN" -eq 1 ]; then
         note "would create $dest"
-        for f in "$SOURCE_DIR"/*.py; do
-            [ -f "$f" ] && note "would copy $(basename "$f")"
-        done
-        for f in $DATA_FILES; do
-            [ -f "$SOURCE_DIR/$f" ] && note "would copy $f"
+        for f in $PACKAGE_FILES; do
+            note "would copy $f"
         done
         return 0
     fi
@@ -442,16 +461,7 @@ install_addon() {
     fi
 
     copied=""
-    for f in "$SOURCE_DIR"/*.py; do
-        [ -f "$f" ] || continue
-        if ! cp -f "$f" "$dest/"; then
-            fail "could not copy $(basename "$f") to $dest"
-            return 1
-        fi
-        copied="$copied $(basename "$f")"
-    done
-    for f in $DATA_FILES; do
-        [ -f "$SOURCE_DIR/$f" ] || continue
+    for f in $PACKAGE_FILES; do
         if ! cp -f "$SOURCE_DIR/$f" "$dest/"; then
             fail "could not copy $f to $dest"
             return 1
@@ -466,8 +476,8 @@ install_addon() {
         note "cleared __pycache__"
     fi
 
-    # Modules removed from the repo but still sitting in the destination
-    for f in "$dest"/*.py; do
+    # Files removed from the repo but still sitting in the destination
+    for f in "$dest"/*; do
         [ -f "$f" ] || continue
         base="$(basename "$f")"
         if [ ! -f "$SOURCE_DIR/$base" ]; then
@@ -475,7 +485,8 @@ install_addon() {
         fi
     done
 
-    for f in $REQUIRED_FILES; do
+    # Verify everything we set out to copy is really there.
+    for f in $PACKAGE_FILES; do
         if [ ! -f "$dest/$f" ]; then
             fail "verification failed -- $f is missing from $dest"
             return 1

@@ -1,6 +1,15 @@
 """Run the pytest suite inside Blender's own Python.
 
-    blender --background --factory-startup --python tests/run_in_blender.py
+    blender --background --factory-startup --python-exit-code 1 \\
+        --python tests/run_in_blender.py
+
+``--python-exit-code 1`` is not optional. Blender exits 0 when a ``--python``
+script raises, so without it a run that never reached :func:`main` -- a syntax
+error, an import that dies at module scope, a collection error -- reports
+success. The ``sys.exit`` at the bottom does propagate on its own, which is
+exactly what makes the omission invisible: every failure the suite is *able* to
+report already sets the code, and only the failures that stop it reporting
+anything are the ones that need the flag.
 
 Why bother, when ``pytest`` on the command line already runs the same tests?
 Because it runs them against *your system* Python. Blender ships its own
@@ -13,7 +22,8 @@ Blender does not bundle pytest. This script finds it, and if it cannot, prints
 the exact command to install it -- built from the running Blender's own
 interpreter path, so it is correct for whichever build you launched.
 
-Exits non-zero if any test fails, so it can be wired into CI.
+Exits non-zero if any test fails -- and, given the flag above, if the suite
+could not be run at all.
 """
 
 import os
