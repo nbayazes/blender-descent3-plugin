@@ -49,6 +49,17 @@ The same rules apply to every entry above, not just the model's own folder:
   So `ConcussionMissile` tries `ConcussionMissile.png`, then
   `ConcussionMissile.bmp`, and so on.
 
+- **`.ogf` and `.pcx` are matched but cannot be opened.** Blender decodes
+  neither, and `.ogf` is exactly the extension Descent 3 itself appends to a
+  `TXTR` name, so it is the one a folder of untouched game assets will be full
+  of. The match still counts: the importer accepts the file, builds the material
+  with an image node whose image is 0×0 and holds no pixel data, logs Blender's
+  `unknown file-format` error to the console, and counts the texture **found**.
+  A folder of `.ogf` textures therefore imports as `textures N/N found`, with
+  nothing reported missing and no texture on the model. Convert them to `.png`
+  before importing, or drop the two extensions from `textures.extensions` in
+  `descent3.toml` to have them reported missing instead.
+
 - Failing an exact filename match, a **case-insensitive** scan of the directory
   listing accepts any file named `<texturename>.<ext>` (ignoring case) for a
   supported `<ext>` — the model stores `blackpanel`, the file is
@@ -114,10 +125,16 @@ for each texture name referenced by the model's faces:
                            model directory,
                            Texture Library from preferences (if set & exists)]:
         try name + ".png", ".bmp", ".tga", ".jpg", ".jpeg", ".ogf", ".pcx"   → first hit wins
+                                          (.ogf and .pcx match, but Blender
+                                           cannot decode either — see below)
         else scan directory for a case-insensitive  name.<supported-ext>       → first hit wins
     if nothing matched anywhere:
         create a blank material named after the texture and report it missing
 ```
+
+A `.ogf` or `.pcx` hit never reaches that last branch. It matched, so it is
+counted as found and reported as such; the material it produces just carries an
+empty image.
 
 Supported extensions and their priority order default to `IMAGE_EXTENSIONS`
 in `descent3_plugin/texutil.py`, and a project can override them (see

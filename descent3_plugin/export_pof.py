@@ -70,8 +70,11 @@ EXPORT_VERSION_ITEMS = [
      "Use the version set in the project's descent3.toml, or v23.00 if there "
      "is none"),
     ("2300", "v23.00 (Latest)", "Descent 3 retail version"),
-    ("2200", "v22.00", "Timed animation support"),
-    ("2100", "v21.00", "Lightmap UV support"),
+    ("2200", "v22.00", "Record layout whose ANIM/PANI chunks carry a "
+     "per-submodel key count and start times -- this add-on writes no "
+     "animation chunks"),
+    ("2100", "v21.00", "Record layout whose faces each carry two lightmap "
+     "UV-diff floats -- this add-on writes them as zeros"),
 ]
 
 DEFAULT_EXPORT_VERSION = EXPORT_VERSION_FROM_CONFIG
@@ -144,7 +147,10 @@ class ExportPOF(bpy.types.Operator, ExportHelper):
 
     bl_idname = EXPORT_OT_IDNAME
     bl_label = "Export Descent 3 POF"
-    bl_description = "Export the selected objects as a Descent 3 polygon model (.pof)"
+    bl_description = (
+        "Export every mesh in the file as a Descent 3 polygon model (.pof), "
+        "or only the selected objects when Selected Only is on"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = POF_FILENAME_EXT

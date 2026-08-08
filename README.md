@@ -2,16 +2,44 @@
 
 A Blender add-on for importing and exporting Descent 3 polygon model files
 (`.pof` / `.oof`). It supports vertices, faces, UV mapping, materials with
-image textures, the submodel hierarchy, gun points, attach points, and animation
-keyframes.
+image textures, the submodel hierarchy, gun points and attach points.
 
 - **Blender:** 4.2+ (developed and tested against 5.2 LTS)
 - **Location in Blender:** `File → Import/Export → Descent 3 POF/OOF (.pof, .oof)`
 
+> **What a round trip loses.** Some of what the parser reads never reaches
+> Blender and is never written back out, so importing a model and exporting it
+> destroys it — silently, with nothing logged and no warning reported. Keep the
+> file you imported.
+>
+> - **Animation keyframes** — export writes no `ANIM` or `PANI` chunk, so every
+>   rotation and position key, every track start and the frame range are gone
+>   from the exported model. The keys *are* read from the file, but nothing is
+>   done with them: no action, no F-curve, nothing to see or edit in Blender.
+>   There is no way to author animation for a model here either.
+> - **Weapon batteries** — the `WBAT` grouping of gun points with the turrets
+>   that aim them is not written. The gun-point empties come back, so nothing
+>   looks wrong, but the model no longer tells the engine which turret aims
+>   which bank.
+> - **Per-vertex alpha** — every vertex exports opaque, so a transparent canopy
+>   or grate round-trips solid.
+> - **Untextured face colours** — a flat-coloured face's RGB is not imported and
+>   exports as mid-grey. In a submodel that also has textured faces it is worse:
+>   the face adopts the first texture material and exports wearing it.
+> - **Ground planes** — the `GRND` points and normals are dropped whole.
+>
+> Lost less visibly: each submodel's geometric centre and separation plane, and
+> a face's authored normal wherever it disagrees with the winding. A model built
+> from scratch in Blender never had any of this, so only models imported from an
+> existing file are affected. [Importing](docs/importing.md) covers what this
+> means in the scene, [Design notes](docs/design-notes.md) why the parser reads
+> it all anyway — and the handful of fields a plain parse → write drops one
+> layer lower, before Blender is involved at all.
+
 ## Documentation
 
 - [Importing](docs/importing.md) — viewport shading, material reuse, damaged
-  files, marker orientation.
+  files, marker orientation, what the file carries that never reaches the scene.
 - [Exporting](docs/exporting.md) — which objects become submodels, transforms and
   authored normals, offsets, marker selection and ordering, material names as
   texture IDs, writing texture images.
@@ -24,7 +52,8 @@ keyframes.
 - [Development](docs/development.md) — the `bpy`-free contract, the test runners
   and Blender's own Python, the tests that need Blender, the manifest, versioning.
 - [Design notes](docs/design-notes.md) — the coordinate rotation, the separate
-  UV flip, what the custom properties carry, round-trip fidelity.
+  UV flip, what the custom properties carry, round-trip fidelity, why the parser
+  reads more than the scene surfaces.
 
 ## Installation
 
@@ -120,7 +149,7 @@ More in [docs/importing.md](docs/importing.md) — and in
 
 | Option | Description |
 |--------|-------------|
-| **POF Version** | Which format version to write. Leave it on *From project config* and the version in your `descent3.toml` applies; pick a specific one to override it for this export |
+| **POF Version** | Which format version to write. Leave it on *From project config* and the version in your `descent3.toml` applies; pick a specific one to override it for this export. The version of an imported file is *not* remembered — it is logged at import and nowhere else, so a v18.07 model re-exports at whatever this setting says |
 | **Selected Only** | Export only the selected objects rather than every mesh in the file. It bounds the gun and attach markers too, not just the meshes (see [Exporting](docs/exporting.md#what-gets-exported)) |
 | **Export Gun Points** | Write empties named with the gun prefix as GPNT gun points |
 | **Export Attach Points** | Write empties named with the attach prefix as ATCH attach points |
@@ -132,9 +161,9 @@ names become texture IDs, and what the **Textures** option writes.
 ## Seeing what the add-on is doing
 
 Most of what the add-on has to tell you — a texture it could not find, a
-material that looks like a Blender duplicate, a file that ends mid-chunk — goes
-to Blender's system console. The status bar shows only the last line, so open
-the console before investigating anything.
+material that looks like a Blender duplicate, a file the parser refuses part-way
+through — goes to Blender's system console. The status bar shows only the last
+line, so open the console before investigating anything.
 
 `Window → Toggle System Console`
 
@@ -155,6 +184,12 @@ and for one that needs attention:
 
 ```
 [descent3_plugin] Texture not found: Hull (searched [...])
+[descent3_plugin] Configured texture directory does not exist: E:\d3\textures
+```
+
+The duplicate-material warning is an **export** one — import never raises it:
+
+```
 [descent3_plugin] Material 'Hull.001' looks like a Blender duplicate ...
 ```
 
@@ -200,7 +235,8 @@ descent3.example.toml   documented template for a project config
 install.ps1 install.sh  find every Blender and deploy the package folder
 run_tests.sh run_tests.ps1   run pytest under Blender's own Python
 docs/                   the long-form documentation
-  importing.md            material reuse, damaged files, marker orientation
+  importing.md            material reuse, damaged files, marker orientation,
+                          what never reaches the scene
   exporting.md            what is exported, texture names, texture images
   textures.md             how a texture name becomes an image file on import
   custom-properties.md    the pof_* and d3_* keys and what export reads back

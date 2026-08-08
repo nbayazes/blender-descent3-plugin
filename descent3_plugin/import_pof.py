@@ -87,8 +87,9 @@ class ImportPOF(bpy.types.Operator, ImportHelper):
         description=(
             "Optional folder to search for texture images. Paste a path here "
             "(a browse button cannot be shown while the import dialog is open). "
-            "If set, it is searched before the model's own folder. Leave empty "
-            "to use only the folder the model is in"
+            "If set, it is searched first; the folders the project's "
+            "descent3.toml lists, the model's own folder and the Texture "
+            "Library preference are searched after it either way"
         ),
         default="",
     )

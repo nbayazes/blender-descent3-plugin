@@ -18,11 +18,20 @@ need to apply transforms by hand, and a mirrored or subdivided mesh exports
 subdivided. Normals go through the same transform, so a scaled object's lighting
 stays right.
 
-**Authored normals are kept.** Descent 3 stores one normal per vertex; import puts
-the file's normals in Blender's custom split normals, and export reads them back
-from there rather than from Blender's computed vertex normals — so a round trip
-returns the normals the model shipped with. A mesh with no custom normals falls
-back to the computed ones, which is right for flat shading anyway.
+**Authored vertex normals are kept.** Descent 3 stores one normal per vertex;
+import puts the file's normals in Blender's custom split normals, and export reads
+them back from there rather than from Blender's computed vertex normals — so a
+round trip returns the *vertex* normals the model shipped with. A mesh with no
+custom normals falls back to the computed ones, which is right for flat shading
+anyway.
+
+**A face's own normal is not.** The format stores a normal per face as well as per
+vertex, and that one does not survive: import never reads it, so nothing in the
+scene holds it, and export gives every face a normal derived from the winding order
+of its corners — every face, every export, whether or not the model came from a
+file. Wherever a file's stored face normal disagreed with its winding, that
+disagreement is gone. [Importing](importing.md) lists the rest of what a round trip
+drops.
 
 A submodel's `offset` is its world position relative to its parent's: the engine
 adds offsets down the hierarchy without applying parent rotation (`MinMaxSubmodel`
@@ -115,11 +124,19 @@ Some things happen quietly in your favour:
   washed out.
 - The scene's **Output Properties** are neutralised alongside it. That panel's
   colour mode and bit depth apply to the same encoder, so a scene set to RGB would
-  drop the alpha from every texture — a grate exporting solid, a canopy exporting
-  opaque, and nothing wrong with the file until the game reads it. Textures are
-  always written RGBA at 8 bits.
+  drop the alpha channel from every texture *image* — a grate's cut-out pixels
+  exporting solid — and nothing would look wrong with the file until the game read
+  it. Textures are always written RGBA at 8 bits.
 
 Your scene's settings are restored afterwards in every case.
+
+**That guard is about image alpha only.** What it protects is the alpha channel of
+the texture image. Descent 3 stores a second, unrelated alpha — one per *vertex* —
+and nothing protects that: import never brings it into the scene, so export
+writes every vertex fully opaque.
+Transparency that came from vertex alpha rather than from a texture image
+round-trips solid however the images are written. See [Importing](importing.md) and
+the round-trip list in the [README](../README.md).
 
 A texture whose image cannot be written is **reported rather than skipped
 silently**. Three things get refused, each naming the texture:
@@ -132,10 +149,12 @@ silently**. Three things get refused, each naming the texture:
   argument, and export overwrites without asking;
 - an image whose source file has been moved or deleted since it was loaded.
 
-The `exported_textures/` folder is created only once a texture is actually written,
-so an export where everything was refused leaves no empty folder behind. Change the
-folder name with `textures.export_dir`, and the default format with
-`export.texture_format`.
+The first two refusals are decided before the folder is made, so an export
+refused for those reasons leaves no empty `exported_textures/` behind. The third
+is not: a source file that has been moved or deleted is only discovered during
+the write, by which point the folder exists, so that one can leave an empty
+folder. Change the folder name with `textures.export_dir`, and the default
+format with `export.texture_format`.
 
 **Import does not search this folder.** Exports stay sandboxed from the models they
 came from — widening the search automatically would make the importer harder to

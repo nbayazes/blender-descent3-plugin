@@ -1,8 +1,12 @@
 """Descent 3 POF/OOF Blender Importer/Exporter.
 
 Import and export Descent 3 3D model files (POF/OOF format). Supports vertices,
-faces, UV mapping, materials, submodel hierarchy, gun points, weapon batteries,
-attach points, and animation keyframes.
+faces, UV mapping, materials, submodel hierarchy, gun points and attach points.
+
+Animation keyframes, weapon batteries, ground planes, per-vertex alpha and
+untextured face colours are parsed by :mod:`poformat` but reach neither Blender
+nor the exported file, so a round trip through this add-on destroys them
+silently. The README lists the lot.
 
 No module-scope ``bpy`` import: the bpy-touching submodules are pulled in only
 from :func:`register`, which keeps ``import descent3_plugin`` working in a plain
