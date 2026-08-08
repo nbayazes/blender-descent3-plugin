@@ -10,7 +10,7 @@
 #
 # This talks to Blender's python.exe directly rather than launching Blender, so
 # it costs no startup time. Tests that genuinely need bpy live in
-# tests/blender/ and are run through Blender itself -- see the README.
+# tests/blender/ and are run through Blender itself -- see docs/development.md.
 #
 # Usage:
 #   ./run_tests.sh                     find Blender, run the whole suite

@@ -11,7 +11,7 @@
 
     This talks to Blender's python.exe directly rather than launching Blender,
     so it costs no startup time. Tests that genuinely need bpy live in
-    tests/blender/ and are run through Blender itself -- see the README.
+    tests/blender/ and are run through Blender itself -- see docs/development.md.
 
     pytest is installed on first use into .pytest-blender\ in this repo, not
     into the Blender install, so a Blender update cannot remove it. The path to
