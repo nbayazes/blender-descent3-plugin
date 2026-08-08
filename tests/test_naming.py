@@ -1,21 +1,15 @@
 """
 Unit tests for the material-name to texture-ID mapping (descent3_plugin/naming.py).
 
-A Blender material's name is the Descent 3 texture ID. Blender uniquifies
-datablock names with a ``.NNN`` suffix, so a second asset sharing a texture name
-produced ``Hull.001`` -- and exporting that wrote a texture ID no bitmap
-matches, which broke the round trip.
-
-The interesting rule is not "strip the suffix" but *when* it is safe to: only
-when the base name is itself a material in the scene, which proves the duplicate
-is being reunited with the original it was cloned from rather than a texture
-name being invented.
-
-That rule is still a guess, and ``metal`` / ``metal.001`` is the case where it
-guesses wrong -- both are real Descent textures. So a material imported by this
-add-on carries the texture ID it was built from, and the tests below hold the
-line that recorded provenance is never overruled by the suffix, while a material
-with no provenance behaves exactly as it did before the key existed.
+A Blender material's name is the Descent 3 texture ID, and Blender uniquifies
+datablock names with a ``.NNN`` suffix, so exporting ``Hull.001`` wrote a
+texture ID no bitmap matches. Stripping the suffix is only safe when the base
+name is itself a material in the scene: its presence is what proves the
+duplicate is being reunited with the original it was cloned from, rather than a
+texture name invented out of a coincidental ``.NNN``. Even that guesses wrong on
+``metal`` / ``metal.001`` -- both real Descent textures -- so an imported
+material records the texture ID it was built from, and that recorded
+provenance outranks the suffix rule.
 
 Run with: python -m pytest tests/test_naming.py -v
 """
@@ -65,8 +59,7 @@ class TestSuffixDetection:
 
     def test_suffix_is_not_limited_to_three_digits(self):
         """Measured in Blender 5.2: past .999 the counter is not zero-padded,
-        so it runs .1000, .1001 and so on. A three-digit-only rule would miss
-        every duplicate past the thousandth."""
+        so it runs .1000, .1001 and so on."""
         assert is_duplicate_material_name("X.1000") is True
         assert base_material_name("X.1000") == "X"
 
@@ -98,9 +91,9 @@ class TestUniquifiedFrom:
     """Export asks this before writing an object's name into a submodel.
 
     Two submodels called ``Wing`` are legal in a POF file and impossible in
-    Blender, so the second object becomes ``Wing.001`` and that suffix must not
-    reach the model. The question is asked against the name the *file* gave the
-    submodel, which is what keeps it from firing on a rename.
+    Blender, so the second object becomes ``Wing.001``. The question is asked
+    against the name the *file* gave the submodel, which keeps it from firing
+    on a rename.
     """
 
     def test_identical_names_match(self):
@@ -131,8 +124,7 @@ class TestMarkerOrderKey:
 
     ``bpy.data.objects`` is sorted as text, which puts ``Gun_10`` between
     ``Gun_1`` and ``Gun_2``. WBAT cites banks by index, so a permuted export
-    swaps a ship's weapons around; under ten markers the two orders agree, which
-    is why it went unnoticed.
+    swaps a ship's weapons around; under ten markers the two orders agree.
     """
 
     def test_numeric_order_beats_text_order(self):
@@ -218,9 +210,7 @@ class TestResolveMergesOnlyWhenTheOriginalExists:
 
 
 #: Scenes with no provenance anywhere -- every .blend built before the material
-#: key existed. Their behaviour is frozen: whatever the suffix rule did for them
-#: yesterday it must still do today, which is what makes upgrading the add-on
-#: safe for a project mid-flight.
+#: key existed. Their behaviour is frozen, so upgrading mid-project is safe.
 PRE_PROVENANCE_CASES = [
     ["Hull", "Hull.001"],
     ["Hull", "Hull.001", "Hull.002"],
@@ -263,9 +253,9 @@ class TestExplicitNoneReproducesThePreProvenanceBehaviour:
 
 class TestRecordedProvenanceOutranksTheSuffixHeuristic:
     def test_two_recorded_ids_that_look_like_duplicates_do_not_merge(self):
-        """The bug this whole mechanism exists for. 'metal' and 'metal.001' are
-        two real textures the game ships; import recorded both, so there is
-        nothing left to guess and the suffix rule gets no vote."""
+        """The bug this mechanism exists for: 'metal' and 'metal.001' are two
+        real textures the game ships, and import recorded both, so the suffix
+        rule gets no vote."""
         explicit = {"metal": "metal", "metal.001": "metal.001"}
         mapping, warnings = resolve_texture_names(["metal", "metal.001"], explicit)
         assert mapping == {"metal": "metal", "metal.001": "metal.001"}
@@ -305,9 +295,9 @@ class TestRecordedProvenanceOutranksTheSuffixHeuristic:
         assert "metal.001" in warnings[0]
 
     def test_a_clone_follows_its_original_to_the_recorded_id(self):
-        """Collapsing onto the material *name* would write a TXTR entry naming
-        a bitmap that does not exist; the clone shares the original's texture by
-        construction, so it has to land where the original lands."""
+        """Collapsing onto the material *name* would write a TXTR entry naming a
+        bitmap that does not exist; the clone shares the original's texture by
+        construction."""
         mapping, warnings = resolve_texture_names(
             ["Hull", "Hull.001"], {"Hull": "hull_side"}
         )
@@ -373,8 +363,8 @@ class TestRecordedProvenanceOutranksTheSuffixHeuristic:
 class TestRejectedTextureName:
     """The texture ID becomes the stem of a file the exporter creates, and
     ``os.path.join`` discards its directory argument when the second one is
-    absolute. Every case below writes somewhere other than beside the model, or
-    writes nothing at all, and none of them raise."""
+    absolute. None of these name shapes raises anywhere: each silently writes
+    somewhere other than beside the model, or writes nothing at all."""
 
     @pytest.mark.parametrize(
         "name",
@@ -406,7 +396,7 @@ class TestRejectedTextureName:
 
     def test_the_drive_rule_does_not_depend_on_the_exporting_platform(self):
         """A drive-relative name is unusable whichever OS Blender runs on, and
-        the same .blend gets exported from both by different people."""
+        the same .blend gets exported from both."""
         assert rejected_texture_name("C:Hull") is not None
 
     @pytest.mark.parametrize("name", ["/Hull", "\\Hull", "/", "\\"])
@@ -475,9 +465,9 @@ class TestRejectedTextureName:
         "name", ["", "C:\\Hull", "/Hull", "../Hull", "sub/Hull", "NUL", "Hull."]
     )
     def test_a_rejection_always_explains_itself(self, name):
-        """The message is shown to the user in place of the written file, so an
-        empty or bare-boolean answer would leave them with a missing texture and
-        no idea which name caused it."""
+        """The message replaces the written file in the UI, so a bare boolean
+        would leave the user with a missing texture and no idea which name
+        caused it."""
         problem = rejected_texture_name(name)
         assert isinstance(problem, str) and problem.strip()
 
@@ -532,8 +522,8 @@ class TestTextureExportFormats:
         assert TEXTURE_FORMAT_NONE not in TEXTURE_FORMATS
 
     def test_ogf_is_absent_until_it_can_be_encoded(self):
-        """Offering a format Blender cannot write would produce files the game
-        rejects. The entry lands with an encoder, not before one."""
+        """Blender cannot encode OGF, so the entry lands with an encoder rather
+        than offering a format that produces files the game rejects."""
         assert "OGF" not in TEXTURE_FORMATS
 
     @pytest.mark.parametrize("fmt", ["ogf", "png", "jpeg", "", "NOPE"])

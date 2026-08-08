@@ -96,9 +96,8 @@ class TestVector3:
 class TestCoordinateConversion:
     """Descent 3 is right-handed Y-up; Blender is right-handed Z-up.
 
-    Both being right-handed means the difference is a rotation, not a mirror --
-    which is why faces do not need their winding reversed and normals transform
-    exactly like positions.
+    Both being right-handed makes the difference a rotation, not a mirror, so
+    faces need no winding reversal and normals transform exactly like positions.
     """
 
     def test_up_maps_to_up(self):
@@ -121,8 +120,8 @@ class TestCoordinateConversion:
         "v", [(1, 2, 3), (-4.5, 0.25, 9.75), (0, 0, 0), (-1, -1, -1)]
     )
     def test_round_trip_is_exact(self, v):
-        """A model making the trip both ways must come back unchanged, or a
-        Blender edit that touches nothing would still rewrite every vertex."""
+        """A round trip must come back unchanged, or a Blender edit that
+        touches nothing would still rewrite every vertex."""
         original = Vector3(*v)
         assert blender_to_descent(descent_to_blender(original)).as_tuple() == v
         assert descent_to_blender(blender_to_descent(original)).as_tuple() == v
@@ -140,10 +139,8 @@ class TestCoordinateConversion:
 
     def test_handedness_is_preserved(self):
         """Cross products must survive, or winding order flips and every face
-        ends up inside out.
-
-        x cross y = z in both spaces, so converting the operands and taking the
-        cross product must equal converting the result.
+        ends up inside out. x cross y = z in both spaces, so converting the
+        operands and crossing must equal converting the result.
         """
         def cross(a, b):
             return Vector3(

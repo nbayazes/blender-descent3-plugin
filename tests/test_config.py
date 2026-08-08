@@ -2,9 +2,8 @@
 Unit tests for the per-project configuration layer (descent3_plugin/config.py).
 
 The importer and the exporter both read this file, so a setting that resolves
-differently on the two sides silently breaks round-tripping. These cover the
-discovery rules, the validation, and -- most importantly -- that a project with
-no config file gets exactly the add-on's pre-configuration behaviour.
+differently on the two sides silently breaks round-tripping. A project with no
+config file must get exactly the add-on's pre-configuration behaviour.
 
 Run with: python -m pytest tests/test_config.py -v
 """
@@ -223,8 +222,8 @@ class TestSearchDirResolution:
 class TestExampleFile:
     """The shipped example must stay in step with the real schema.
 
-    An example that documents a key the parser rejects, or omits one it
-    accepts, is worse than no example: it is the first thing a user copies.
+    An example documenting a key the parser rejects, or omitting one it accepts,
+    is worse than none: it is the first thing a user copies.
     """
 
     @staticmethod
@@ -331,8 +330,8 @@ class TestTextureExportSettings:
     )
     def test_export_dir_must_stay_beside_the_model(self, value, reason):
         """Python 3.13 stopped treating a single leading slash as absolute on
-        Windows, so os.path.isabs alone would let '/textures' through -- and it
-        resolves to the drive root."""
+        Windows, so os.path.isabs alone would let '/textures' through to the
+        drive root."""
         config, warnings = parse_config({"textures": {"export_dir": value}})
         assert config.textures.export_dir == DEFAULT_CONFIG.textures.export_dir
         assert any(reason in w for w in warnings), warnings

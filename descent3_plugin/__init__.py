@@ -4,12 +4,9 @@ Import and export Descent 3 3D model files (POF/OOF format). Supports vertices,
 faces, UV mapping, materials, submodel hierarchy, gun points, weapon batteries,
 attach points, and animation keyframes.
 
-This module deliberately has no module-scope ``bpy`` import. The operators and
-the conversion code live in :mod:`descent3_plugin.import_pof` and
-:mod:`descent3_plugin.export_pof`, which are pulled in only from
-:func:`register`. That keeps ``import descent3_plugin`` -- and therefore
-``from descent3_plugin.poformat import ...`` -- working in a plain Python
-interpreter, which is what the pytest suite relies on.
+No module-scope ``bpy`` import: the bpy-touching submodules are pulled in only
+from :func:`register`, which keeps ``import descent3_plugin`` working in a plain
+Python interpreter, as the pytest suite relies on.
 """
 
 bl_info = {
@@ -34,52 +31,40 @@ log = logging.getLogger(__name__)
 # in. Everything bpy-touching stays behind _submodules().
 from . import constants
 
-#: Submodules that import ``bpy``, in registration order. Each exposes a
-#: ``classes`` tuple of the bpy types it wants registered. Deliberately written
-#: out rather than derived: a module missing from here loses its operators
-#: outright, so which modules register -- and in what order -- is a decision
-#: worth stating. :func:`_submodules` says so out loud if a module defines
-#: ``classes`` without being named here. The reload order below is derived
-#: instead, because a module missing from *that* changes nothing visible, which
-#: is precisely how ``texexport`` stayed off it for so long.
+#: Submodules that import ``bpy``, in registration order; each exposes a
+#: ``classes`` tuple of the bpy types it wants registered. Listed by hand rather
+#: than derived: a module missing from here loses its operators outright, so
+#: :func:`_submodules` warns when a module defines ``classes`` but is not named.
 _SUBMODULE_NAMES = ("preferences", "import_pof", "export_pof")
 
 #: Exactly the classes :func:`register` installed, so :func:`unregister` removes
 #: those same objects. Re-deriving them from ``sys.modules`` risks unregistering
-#: a fresh class object, which Blender rejects with "not the registered object"
-#: after the menu entries have already been stripped.
+#: a fresh class object, which Blender rejects with "not the registered object".
 _registered = []
 
 
 def _scan_package() -> tuple[dict[str, set[str]], set[str]]:
     """Read the package folder to find out what it contains.
 
-    The reload list this feeds used to be written out by hand, and it quietly
-    rotted: ``texexport`` was never added to it, so an edited ``texexport.py``
-    kept running its previous code after toggling the add-on off and on -- the
-    exact workflow :func:`_submodules` exists to preserve. Nothing fails when
-    that list is wrong, which is why nobody noticed for so long. Reading the
-    folder instead means it cannot go wrong again: a new module is picked up the
-    moment it lands next to this file.
+    The reload list this feeds used to be hand-written and rotted silently --
+    ``texexport`` was never on it, so edits to it kept running stale code after
+    an add-on toggle. Reading the folder cannot go out of date.
 
-    The modules are parsed with :mod:`ast`, never imported. Importing them here
-    would defeat the deferral that keeps ``import descent3_plugin`` working
-    without Blender, and would drag ``bpy`` into a package that promises not to
-    touch it outside :func:`register`.
+    Modules are parsed with :mod:`ast`, never imported: importing them here would
+    drag ``bpy`` in and defeat the deferral that keeps ``import descent3_plugin``
+    working without Blender.
 
     Returns:
         An ``(imports, with_classes)`` pair. ``imports`` maps every sibling
         module's name to the set of sibling modules it imports; ``with_classes``
-        holds the names of the modules that define a module-level ``classes``
-        tuple, i.e. the ones that have bpy types to register.
+        holds the modules defining a module-level ``classes`` tuple.
     """
     directory = os.path.dirname(os.path.abspath(__file__))
     try:
         entries = sorted(os.listdir(directory))
     except OSError as e:
-        # Survivable: a package folder that cannot be listed is one that cannot
-        # be reloaded, and running the already-imported code is a far better
-        # outcome than refusing to register at all.
+        # Survivable: a folder that cannot be listed cannot be reloaded, and
+        # running the already-imported code beats refusing to register at all.
         log.warning("Could not read %s to plan the reload: %s", directory, e)
         return {}, set()
 
@@ -93,16 +78,16 @@ def _scan_package() -> tuple[dict[str, set[str]], set[str]]:
             with open(path, encoding="utf-8") as f:
                 tree = ast.parse(f.read(), filename=path)
         except (OSError, SyntaxError, ValueError) as e:
-            # Keep the module in the reload set with no recorded dependencies.
-            # Reloading it in a suboptimal position is recoverable; leaving it
-            # out is the failure this whole mechanism exists to prevent, and a
-            # module that really is broken raises on reload, which is loud.
+            # ``continue`` leaves the module in the reload set with no recorded
+            # dependencies: a suboptimal reload position is recoverable, leaving
+            # it out is the failure this mechanism exists to prevent. A module
+            # that really is broken raises from importlib.reload() at register
+            # time, so this warning hides nothing.
             log.warning("Could not scan %s.py, assuming no dependencies: %s", name, e)
             continue
 
-        # Every relative import in the file, not just the module-scope ones: a
-        # dependency imported inside a function is still a dependency, and a
-        # missed edge is a wrong reload order.
+        # Walked, not just module scope: a dependency imported inside a function
+        # is still a dependency, and a missed edge is a wrong reload order.
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.level != 1:
                 continue
@@ -127,11 +112,9 @@ def _scan_package() -> tuple[dict[str, set[str]], set[str]]:
 def _reload_order(imports: dict[str, set[str]]) -> tuple[str, ...]:
     """Order the package's modules so a dependency is always reloaded first.
 
-    ``from .x import NAME`` binds the value, not the module, so every module
-    holds copies of whatever its dependencies exported at import time. Reloading
-    a dependency *after* its dependents therefore leaves them holding the values
-    from before the edit -- a failure that shows up as code behaving the way it
-    did two saves ago, with nothing to point at.
+    ``from .x import NAME`` binds the value, not the module, so reloading a
+    dependency *after* its dependents leaves them holding pre-edit values --
+    which surfaces as code behaving the way it did two saves ago.
 
     Args:
         imports: Module name -> the sibling modules it imports, as returned by
@@ -139,17 +122,16 @@ def _reload_order(imports: dict[str, set[str]]) -> tuple[str, ...]:
 
     Returns:
         Every name in ``imports``, each preceded by everything it imports.
-        Modules that do not depend on each other come out alphabetically, so the
-        order is stable between runs.
+        Independent modules come out alphabetically, so the order is stable.
     """
     pending = {name: set(deps) for name, deps in imports.items()}
     ordered = []
     while pending:
         ready = sorted(name for name, deps in pending.items() if not deps)
         if not ready:
-            # An import cycle has no correct reload order at all, and Python
-            # tolerates some of them at run time, so break it deterministically
-            # rather than dropping the modules involved on the floor.
+            # An import cycle has no correct reload order, and Python tolerates
+            # some at run time, so break it deterministically rather than
+            # dropping the modules involved.
             ready = [min(pending)]
             log.warning(
                 "Import cycle among %s; reloading %s first, which may leave "
@@ -168,17 +150,12 @@ def _submodules(reload_first: bool = False) -> list:
     """Import the bpy-touching submodules on demand.
 
     ``addon_utils.enable()`` reloads only this package's ``__init__``, and only
-    when its own mtime changed, so an edited ``import_pof.py`` would keep running
-    stale code after toggling the add-on off and on in Preferences. Reloading
-    explicitly at register time preserves that workflow.
+    when its mtime changed, so an edited ``import_pof.py`` would keep running
+    stale code after toggling the add-on off and on. Reloading explicitly at
+    register time preserves that workflow.
 
-    What gets reloaded is read off the package folder by :func:`_scan_package`
-    rather than listed by hand. Only modules that are already in
-    ``sys.modules`` are reloaded, so this never imports anything -- and never
-    pulls ``bpy`` in -- that was not loaded already.
-
-    Args:
-        reload_first: Reload already-imported modules rather than reusing them.
+    Only modules already in ``sys.modules`` are reloaded, so this never imports
+    -- and never pulls ``bpy`` in -- anything that was not loaded already.
 
     Returns:
         The submodule objects named by :data:`_SUBMODULE_NAMES`, in order.
@@ -186,10 +163,9 @@ def _submodules(reload_first: bool = False) -> list:
     if reload_first:
         imports, with_classes = _scan_package()
 
-        # A module that declares ``classes`` but is missing from
-        # _SUBMODULE_NAMES is never registered: its operators simply do not
-        # exist, and Blender reports nothing at all. The fix is one word in the
-        # tuple above, so name the module rather than let it fail in silence.
+        # A module declaring ``classes`` but missing from _SUBMODULE_NAMES is
+        # never registered and Blender reports nothing at all, so name it here
+        # rather than let it fail in silence.
         unregistered = sorted(with_classes.difference(_SUBMODULE_NAMES))
         if unregistered:
             log.warning(
@@ -234,9 +210,8 @@ def _remove_menu_entries() -> None:
         try:
             menu.remove(func)
         except ValueError:
-            # Not fatal -- the entry is gone either way, which is the goal. It
-            # does mean something else removed it, so say so rather than let a
-            # disappearing menu entry go unexplained.
+            # Not fatal -- the entry is gone either way. It does mean something
+            # else removed it, so say so rather than leave that unexplained.
             log.warning(
                 "%s was not in %s; it had already been removed",
                 func.__name__, menu.__name__,
@@ -246,10 +221,9 @@ def _remove_menu_entries() -> None:
 def register():
     """Register the operators and add both File menu entries.
 
-    Re-entrant: registering while already registered unregisters first. Without
-    that guard the reload in :func:`_submodules` would hand Blender fresh class
-    objects, which it accepts for an already-taken ``bl_idname``, leaving a
-    duplicate row in each File menu and a doubled :data:`_registered`.
+    Re-entrant: registering while already registered unregisters first. Blender
+    accepts fresh class objects for an already-taken ``bl_idname``, so without
+    the guard the reload leaves a duplicate row in each File menu.
     """
     import bpy
 
@@ -281,6 +255,6 @@ def unregister():
         except RuntimeError as e:
             # Not fatal: the class is gone, which is what unregistering wanted.
             # Blender drops the previous class when a reloaded one claims the
-            # same bl_idname, so this is expected after an add-on reload -- but
-            # it also fires if registration half-failed, so it is worth saying.
+            # same bl_idname, so this is expected after a reload -- but it also
+            # fires if registration half-failed, so it is worth logging.
             log.warning("Could not unregister %s: %s", cls.__name__, e)

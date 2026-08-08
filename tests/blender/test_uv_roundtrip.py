@@ -1,11 +1,10 @@
 """
 Blender-side import/export round-trip check.
 
-pytest can only reach the ``bpy``-free code, so the mesh-building half of the
-add-on -- UV orientation in particular -- has to be exercised inside real
-Blender. Descent 3 puts the UV origin at the top-left and Blender at the
-bottom-left, so import negates V and export must negate it back; when only one
-side did, every exported texture came out vertically mirrored.
+pytest can only reach the ``bpy``-free code, so UV orientation has to be
+exercised inside real Blender. Descent 3 puts the UV origin at the top-left and
+Blender at the bottom-left, so import negates V and export must negate it back;
+when only one side did, every exported texture came out vertically mirrored.
 
 Run:
     blender --background --factory-startup --python-exit-code 1 \
@@ -60,8 +59,8 @@ class FakeExportOp:
 def wipe():
     """Clear scene data between scenarios.
 
-    ``bpy.data.collections`` is deliberately left alone: removing the scene's
-    master collection children leaves the view layer without a valid object
+    ``bpy.data.collections`` is deliberately left alone: removing the scene
+    master collection's children leaves the view layer without a valid object
     list, and iterating it then yields None.
     """
     for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials):
@@ -117,7 +116,6 @@ exported_uvs = model_uvs(poformat.parse_pof(open(out_path, "rb").read()))
 check("export negates V back", exported_uvs == source_uvs,
       "" if exported_uvs == source_uvs else f"{exported_uvs[:4]} != {source_uvs[:4]}")
 
-# Geometry and materials should survive the same trip.
 reparsed = poformat.parse_pof(open(out_path, "rb").read())
 check("submodel count preserved",
       len(reparsed.submodels) == len(source.submodels))

@@ -37,16 +37,10 @@ class ParserSpun(RuntimeError):
 class BudgetedStream(io.BytesIO):
     """A stream that ends a runaway parse instead of letting it hang the suite.
 
-    The defect these tests cover is not a wrong answer, it is a parser that
-    never returns: a negative chunk length seeks back onto the header it just
-    read, and ``parse_pof_stream`` re-reads it forever. A plain
-    ``pytest.raises`` around that would not fail, it would wedge the whole test
-    run at 100% CPU, which is exactly the experience the fix exists to prevent
-    and a rotten way to find out about a regression. Capping the number of
-    reads turns the hang back into an ordinary failed assertion.
-
-    The budget only has to exceed what a sound parse of a handful of bytes
-    needs; a spinning loop burns two reads per revolution and trips it at once.
+    A negative chunk length seeks back onto the header just read and
+    ``parse_pof_stream`` re-reads it forever, so a plain ``pytest.raises`` would
+    wedge the run at 100% CPU rather than fail. A spinning parse burns two reads
+    per revolution, so any budget above a sound parse's needs trips it at once.
     """
 
     def __init__(self, data: bytes, budget: int = 500) -> None:
@@ -68,8 +62,8 @@ def _pof_header() -> bytes:
 def _chunk_header(tag: bytes, length: int) -> bytes:
     """Return a chunk header for ``tag`` declaring a body of ``length`` bytes.
 
-    Chunk IDs are written as the little-endian int of their four ASCII bytes,
-    so the tag lands in the file verbatim and can be spelled as bytes here.
+    Chunk IDs are the little-endian int of their four ASCII bytes, so the tag
+    lands in the file verbatim and can be spelled as bytes here.
     """
     return tag + struct.pack("<i", length)
 
@@ -422,8 +416,8 @@ class TestTruncatedTail:
     """A file cut short mid-chunk-header must say so.
 
     Chunk reading ends on EOFError, which is also how a well-formed file
-    finishes, so a truncated tail used to be indistinguishable from a clean
-    end: the model silently lost whatever the cut-off chunks held.
+    finishes, so a truncated tail used to be indistinguishable from a clean end
+    and the model silently lost whatever the cut-off chunks held.
     """
 
     @staticmethod
@@ -463,14 +457,11 @@ class TestTruncatedTail:
 class TestChunkLengthGuard:
     """A chunk length is signed and comes straight off disk.
 
-    At -8 it makes ``chunk_end`` equal the offset of the header being read, so
-    the parse loop seeks back to that header and reads it again, and again, on
-    Blender's main thread with no progress bar and no cancel: the user's only
-    way out is to kill Blender and lose whatever was unsaved. Every case here
-    runs on a :class:`BudgetedStream` so a regression fails rather than hangs.
-
-    A length that runs past the end of the file is the other half of the story
-    and gets the opposite treatment -- see :class:`TestOverrunningChunkLength`.
+    At -8 ``chunk_end`` equals the offset of the header being read, so the parse
+    loop re-reads that header forever on Blender's main thread with no cancel.
+    Every case here runs on a :class:`BudgetedStream` so a regression fails
+    rather than hangs. A length running past the end of the file gets the
+    opposite treatment -- see :class:`TestOverrunningChunkLength`.
     """
 
     @pytest.mark.parametrize("length", [-8, -1, -12, -(1 << 30)])
@@ -497,12 +488,10 @@ class TestChunkLengthGuard:
 class TestOverrunningChunkLength:
     """A chunk body that is not in the file ends the chunk list.
 
-    Eight or more junk bytes on the end of a good model read as a chunk header,
-    and whatever they say the length is, the body is not there. So does a file
-    cut short by a failed copy. Neither is a reason to refuse the model: every
-    chunk before that point parsed, and rejecting the file outright means an
-    import that used to work now fails completely -- which is what happened when
-    this length was validated the way the negative one is.
+    Eight or more junk bytes on the end of a good model read as a chunk header
+    whose body is not there, and so does a file cut short by a failed copy.
+    Every chunk before that point parsed, so validating this length the way the
+    negative one is validated made imports that used to work fail completely.
     """
 
     @staticmethod
@@ -548,12 +537,10 @@ class TestOverrunningChunkLength:
 class TestSubmodelIndexGuard:
     """A SOBJ index is used to place the submodel in a list.
 
-    A negative one does not raise in Python, it overwrites: the growth loop
-    ``while len(model.submodels) <= -1`` never runs and ``submodels[-1] = sm``
-    replaces the submodel parsed before it. No ``None`` is left behind, so the
-    missing-submodel warning never fires -- the import just reports one
-    subobject too few, and the children of the overwritten one lose their
-    parent and land at the model origin.
+    A negative one does not raise, it overwrites: the growth loop never runs and
+    ``submodels[-1] = sm`` replaces the submodel parsed before it. No ``None``
+    is left behind, so the missing-submodel warning never fires and the children
+    of the overwritten submodel lose their parent and land at the model origin.
     """
 
     @staticmethod
@@ -569,9 +556,9 @@ class TestSubmodelIndexGuard:
         """Rewrite the index field of the last SOBJ record in ``data``.
 
         Chunk tags survive into the file as their four ASCII bytes, so the
-        record can be found by searching for the tag rather than by
-        re-implementing the chunk walk here. The index is the first field of
-        the body, i.e. eight bytes past the tag.
+        record is found by searching for the tag rather than by re-implementing
+        the chunk walk. The index is the first field of the body, i.e. eight
+        bytes past the tag -- a 4-byte tag and a 4-byte length.
         """
         field = data.rindex(b"SOBJ") + 8
         return data[:field] + struct.pack("<i", index) + data[field + 4:]

@@ -2,30 +2,28 @@
 Blender-side texture export check.
 
 Export writes texture *names* into the TXTR chunk; this covers writing the
-pixels those names refer to. Several Blender behaviours make that easy to get
-silently wrong, and each is asserted here rather than trusted:
+pixels those names refer to. Blender behaviours that make that silently wrong,
+each asserted here rather than trusted:
 
-1. ``Image.save(filepath=...)`` ignores ``file_format``. Asking for Targa and
-   getting a ``.tga`` file full of PNG bytes looks like success from Python and
-   is rejected by the game. The magic number is checked, not the extension.
+1. ``Image.save(filepath=...)`` ignores ``file_format``, so a ``.tga`` can come
+   out full of PNG bytes and be rejected by the game. The magic number is
+   checked, not the extension.
 2. ``Image.save_render()`` renders through the scene's colour management, and
-   Blender 5.2 defaults the view transform to AgX. Exported textures would come
-   out tone-mapped. The bytes are compared against the untouched source.
+   Blender 5.2 defaults the view transform to AgX, so textures come out
+   tone-mapped. Bytes are compared against the untouched source.
 3. ``save_render`` also encodes through the scene's Output Properties, so a
-   scene left on RGB or BW writes every texture without its alpha channel. The
-   Targa pixel depth is read out of the header, because a 24-bit file with the
-   right pixels in it looks correct everywhere except in the game.
-4. A texture ID is a filename. Blender is perfectly happy with a material
-   called ``../../../hull``, and the export used to join that straight onto the
-   output folder and overwrite whatever it landed on. The file that name aims
-   at is asserted *not* to appear.
+   scene left on RGB or BW drops every texture's alpha channel. The Targa pixel
+   depth is read out of the header, since a 24-bit file with the right pixels
+   looks correct everywhere except in the game.
+4. A texture ID is a filename, and Blender is happy with a material called
+   ``../../../hull``, which export used to join straight onto the output folder.
+   The file that name aims at is asserted *not* to appear.
 5. ``Image.pixels`` edits live in the datablock, not on disk, so the fast path
-   that copies the source file has to consult ``is_dirty`` or it exports the
-   art as it was before the artist started painting.
+   that copies the source file has to consult ``is_dirty``.
 
-The other half of picking a texture is picking the right *image* out of a PBR
-material: Descent 3 gives a face one texture, and a material whose Normal Map
-node was built before its Base Color used to export the normal map.
+Descent 3 gives a face one texture, so the other half is picking the right
+*image* out of a PBR material: one whose Normal Map node was built before its
+Base Color used to export the normal map.
 
     blender --background --factory-startup --python-exit-code 1 \
         --python tests/blender/test_texture_export.py
@@ -76,9 +74,8 @@ def magic(path):
 def tga_depth(path):
     """Return a Targa's bits per pixel, which is where a dropped alpha shows.
 
-    Byte 16 of the header: 32 with alpha, 24 for RGB, 8 for greyscale. Measured
-    against this Blender -- writing the same image with ``color_mode`` set to
-    RGBA, RGB and BW gives exactly those three.
+    Byte 16 of the header: 32 with alpha, 24 for RGB, 8 for greyscale --
+    measured against this Blender writing the same image at each ``color_mode``.
     """
     with open(path, "rb") as f:
         return f.read(18)[16]
@@ -93,9 +90,9 @@ def read(path):
 def textured_material(name, base_image, normal_image=None):
     """Build a material, creating its Normal Map branch *before* Base Color.
 
-    Node order in ``node_tree.nodes`` is creation order, so this is the exact
-    shape that used to export the normal map as the game texture: any earlier
-    node with a linked output won under the old rule.
+    Node order in ``node_tree.nodes`` is creation order, so this is the shape
+    that used to export the normal map as the game texture: under the old rule
+    any earlier node with a linked output won.
 
     Args:
         name: Material name, which is also the texture ID it exports as.
@@ -132,13 +129,12 @@ def add_material(mat):
 def export_here(name, fmt="PNG"):
     """Export whatever is currently in the file, without reloading it.
 
-    ``export_with`` wipes and re-imports first, which is wrong for the cases
-    that are *about* the state of the scene -- an unsaved paint edit does not
-    survive a wipe.
+    ``export_with`` wipes and re-imports first, which is wrong for cases that
+    are *about* the state of the scene -- an unsaved paint edit does not survive
+    a wipe.
 
     Args:
         name: Subfolder of the work directory to export into.
-        fmt: Texture format for the export dialog.
 
     Returns:
         An ``(out_dir, operator)`` pair.
@@ -153,13 +149,11 @@ def export_here(name, fmt="PNG"):
 def neutral_encode(image, destination, fmt):
     """Encode ``image`` the way an untone-mapped, alpha-preserving save would.
 
-    The reference every conversion is compared against: the scene's own
-    settings are what the export has to override, so the comparison has to
-    spell out the values it is meant to end up at rather than trusting them.
+    The reference every conversion is compared against. The scene's own settings
+    are what export has to override, so this spells the target values out rather
+    than trusting them.
 
     Args:
-        image: Image to encode.
-        destination: File to write.
         fmt: Blender ``file_format`` identifier.
     """
     scene = bpy.context.scene
@@ -223,8 +217,8 @@ MODEL = os.path.join(src, "textured_cube.oof")
 source = poformat.parse_pof(open(MODEL, "rb").read())
 print("fixture textures:", source.textures)
 
-# Make AgX the active view transform, which is Blender 5.2's default and the
-# whole reason the colour-management guard exists.
+# AgX is Blender 5.2's default view transform, and the whole reason the
+# colour-management guard exists.
 bpy.context.scene.view_settings.view_transform = "AgX"
 print("scene view transform:", bpy.context.scene.view_settings.view_transform)
 
@@ -258,7 +252,7 @@ check("PNG files really are PNG",
       str([(f, magic(os.path.join(tex_dir, f))) for f in files]))
 
 # The fixture's sources are PNG, so this path copies rather than re-encodes --
-# which is exactly how it dodges colour management. Prove the bytes match.
+# which is exactly how it dodges colour management.
 identical = all(
     open(os.path.join(tex_dir, t + ".png"), "rb").read()
     == open(os.path.join(src, t + ".png"), "rb").read()
@@ -277,8 +271,8 @@ check("the .tga files are NOT secretly PNG",
       str([(f, magic(os.path.join(tex_dir, f))) for f in files]))
 
 # --- 4. the colour-management trap --------------------------------------
-# Re-encoding under AgX would change the pixels. Compare against the same
-# conversion done with colour management explicitly neutral.
+# Re-encoding under AgX would change the pixels, so the reference is the same
+# conversion with colour management explicitly neutral.
 img = bpy.data.images.load(os.path.join(src, source.textures[0] + ".png"))
 scene = bpy.context.scene
 reference = os.path.join(work, "reference.tga")
@@ -289,13 +283,12 @@ check("converted texture matches a neutral encode, not an AgX one",
       read(exported) == read(reference),
       f"{os.path.getsize(exported)} vs {os.path.getsize(reference)} bytes")
 
-# And the scene must be left exactly as it was found.
 check("scene view transform restored after export",
       scene.view_settings.view_transform == "AgX",
       scene.view_settings.view_transform)
 
 # --- 5. the export folder is written, but NOT auto-searched --------------
-# Import deliberately does not widen its search to the export folder. Doing so
+# Import deliberately does not widen its search to the export folder: doing so
 # on the user's behalf makes the importer unpredictable, and a project may be
 # sandboxed off from its own exports on purpose. Opting in is a config change.
 out, _ = export_with("PNG", "roundtrip")
@@ -319,7 +312,7 @@ check("re-import does NOT silently reach into the export folder",
       textured == [],
       f"textured={textured} (the export folder must not be searched implicitly)")
 
-# Opting in through the project config must work, and is the documented route.
+# Opting in through the project config is the documented route.
 with open(os.path.join(out, "descent3.toml"), "w", encoding="utf-8") as f:
     f.write('[textures]\nsearch_dirs = ["%s"]\n' % EXPORT_DIR)
 
@@ -374,8 +367,8 @@ check("the other textures were still written",
 # --- 7. the image exported is the one driving Base Color -----------------
 # A PBR material has several images and Descent 3 takes one. Picking the first
 # linked image-texture node picks whichever was *created* first, so this
-# material -- normal map built first, base colour second -- used to export its
-# normal map as the game texture and render lilac in the game.
+# material -- normal map first, base colour second -- used to export its normal
+# map and render lilac in the game.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 base_img = bpy.data.images.load(os.path.join(src, "Hull.png"), check_existing=True)
@@ -396,12 +389,10 @@ if os.path.isfile(written_tex):
           "normal map" if exported_bytes == normal_bytes else "neither source")
 
 # --- 7b. ... even when it arrives through a Mix node ---------------------
-# The standard way to layer a detail texture over a diffuse one is a Mix node
-# with a mask driving its Factor. Following the Mix's inputs in the order
-# Blender stores them reaches Factor first -- socket 0 of ten, because the node
-# keeps one input set per data type -- so the *mask* was exported as the game
-# texture: a greyscale image where the diffuse should be, and a worse answer
-# than the naive rule this search replaced.
+# A Mix node with a mask driving its Factor is the standard way to layer a detail
+# texture over a diffuse one. The Mix keeps one input set per data type, so
+# following its inputs in stored order reaches Factor at socket 0 of ten and the
+# *mask* was exported as the game texture.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 diffuse_img = bpy.data.images.load(os.path.join(src, "Hull.png"), check_existing=True)
@@ -419,7 +410,7 @@ tex_diffuse.image = diffuse_img
 mix = nodes.new("ShaderNodeMix")
 mix.data_type = "RGBA"
 # By name *and* type: the node carries a Factor and an A for every data type it
-# supports, and only the RGBA pair is the one this Mix is actually blending.
+# supports, and only the RGBA pair is what this Mix is blending.
 links.new(tex_mask.outputs["Color"],
           next(s for s in mix.inputs if s.name == "Factor" and s.type == "VALUE"))
 links.new(tex_diffuse.outputs["Color"],
@@ -443,9 +434,9 @@ if os.path.isfile(written_tex):
           "mask" if exported_bytes == mask_bytes else "neither source")
 
 # --- 8. a texture name shaped like a path escape is refused --------------
-# Blender allows separators in a datablock name, so this is a material a user
-# can type and a TXTR chunk can carry. Joined onto the export folder it climbs
-# out of it and overwrites whatever it lands on, without a prompt.
+# Blender allows separators in a datablock name, so this is a material a user can
+# type and a TXTR chunk can carry. Joined onto the export folder it climbs out of
+# it and overwrites whatever it lands on, without a prompt.
 escapes = ["../../../d3_escape_probe", "..\\..\\..\\d3_escape_win"]
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
@@ -480,11 +471,10 @@ check("refusing a name does not stop the rest of the textures",
       == sorted(t + ".png" for t in source.textures),
       str(sorted(os.listdir(os.path.join(out, EXPORT_DIR)))))
 
-# The model still references the refused ID -- it has to, the ID is the round
-# trip's identity and rewriting it would point the faces at a different texture.
-# So the user has to be told about the *model*, not only about the file that was
-# not written, and told even when they asked for no texture images at all: the
-# ID goes into the TXTR chunk either way, and that path used to say nothing.
+# The model still references the refused ID: the ID is the round trip's identity
+# and rewriting it would point the faces at a different texture. So the user is
+# told about the *model*, not only the file that was not written -- including
+# when they asked for no texture images, since the ID reaches TXTR either way.
 model_path = os.path.join(out, "model.pof")
 exported_model = poformat.parse_pof(open(model_path, "rb").read())
 check("the unusable ID really is in the model's texture list",
@@ -504,10 +494,9 @@ check("and is told it with texture images switched off too",
       str([m for _, m in none_op.reports]))
 
 # --- 9. the scene's Output Properties must not eat the alpha channel -----
-# save_render encodes through scene.render.image_settings, which is the panel
-# the user set up for rendering. A scene on BW writes 8-bit greyscale Targas:
-# every glass and grate texture exports opaque, and the file looks fine in a
-# viewer.
+# save_render encodes through scene.render.image_settings, the panel the user set
+# up for rendering. A scene on BW writes 8-bit greyscale Targas: every glass and
+# grate texture exports opaque, and the file still looks fine in a viewer.
 scene.render.image_settings.color_mode = "BW"
 out, op = export_with("TARGA", "alpha")
 tex_dir = os.path.join(out, EXPORT_DIR)
@@ -521,7 +510,7 @@ check("the scene's own colour mode is restored after export",
 scene.render.image_settings.color_mode = "RGBA"
 
 # --- 10. unsaved edits are exported, not the stale file on disk ----------
-# Texture Paint keeps its strokes in the datablock until somebody saves. The
+# Texture Paint keeps its strokes in the datablock until somebody saves, so the
 # copy fast path would hand over the file as it was before the artist started.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())

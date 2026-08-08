@@ -2,27 +2,24 @@
 Blender-side material-ID reuse check.
 
 A Blender material's name is the Descent 3 texture ID. ``bpy.data.materials.new``
-always mints a new datablock and Blender uniquifies the name, so importing a
-second asset that shares a texture used to produce ``Hull.001`` -- and export
-wrote that into the TXTR chunk as a texture no bitmap matches. Re-importing then
-brought half the model back untextured.
+always mints a new datablock and Blender uniquifies the name, so a second import
+sharing a texture produced ``Hull.001``, export wrote that into the TXTR chunk as
+a texture no bitmap matches, and re-importing brought half the model back
+untextured.
 
-Reuse is what fixes that, and reuse has a boundary this file also pins down.
-Adopting a material because it happens to share a name is not permission to
-restyle it: enabling nodes on the user's own ``Hull`` and wiring an image into
-it changes every object in their scene that uses it. So a material is only
+Reuse fixes that, and has a boundary this file also pins down: sharing a name is
+not permission to restyle a material, because wiring an image into the user's own
+``Hull`` changes every object in their scene that uses it. A material is only
 finished off when it carries
 :data:`~descent3_plugin.constants.PROP_KEY_ADDON_MATERIAL`, the mark this add-on
-writes on datablocks it creates. Anything else is used exactly as it arrives --
-and stays that way however many times the model is imported, which is its own
-scenario below because the first version of this rule read authorship off the
-*texture* key and so spared the user's material once and then edited it.
+writes on datablocks it creates; anything else is used exactly as it arrives, on
+every import -- the first version of this rule read authorship off the *texture*
+key, so it spared the user's material once and then edited it on the next import.
 
-:data:`~descent3_plugin.constants.PROP_KEY_TEXTURE`, the separate record of
-which bitmap a material stands for, is what tells ``metal`` and ``metal.001`` --
-two real Descent 3 bitmaps -- apart from a material somebody duplicated in the
-outliner, so the duplicate-suffix rule is exercised here on materials that carry
-no record, which is now the only place it applies.
+:data:`~descent3_plugin.constants.PROP_KEY_TEXTURE` records which bitmap a
+material stands for, and is what tells the two real Descent 3 bitmaps ``metal``
+and ``metal.001`` apart from a material somebody duplicated in the outliner. The
+duplicate-suffix rule therefore applies only to materials carrying no record.
 
 pytest cannot reach any of this: it lives entirely in ``bpy``. Run inside
 Blender:
@@ -70,8 +67,7 @@ class FakeImportOp:
 
     def __init__(self):
         # Kept so a scenario can assert the user was actually told something,
-        # rather than it having gone only to the system console -- which is
-        # exactly the failure mode the adoption rules exist to end.
+        # rather than it having gone only to the system console.
         self.reports = []
 
     def report(self, level, msg):
@@ -91,11 +87,10 @@ class FakeExportOp:
 def wipe():
     """Clear scene data between scenarios.
 
-    ``bpy.data.collections`` is deliberately left alone, and the view layer is
-    updated afterwards: removing objects without doing so leaves the view layer
-    holding stale entries, and iterating it then yields None. Images are dropped
-    too, so a reused ``bpy.data.images`` entry cannot make an untextured
-    material look textured.
+    ``bpy.data.collections`` is deliberately left alone; the view layer must be
+    updated after removing objects or it holds stale entries that iterate to
+    None. Images go too, so a reused ``bpy.data.images`` entry cannot make an
+    untextured material look textured.
     """
     for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials,
                  bpy.data.images):
@@ -111,11 +106,10 @@ def material_names():
 def suffixed(names):
     """Names carrying Blender's .NNN duplicate suffix.
 
-    Asks the production rule rather than restating it. This used to match
-    exactly three digits, which is the narrowing ``\\.\\d{3,}$`` exists to avoid:
-    past ``.999`` Blender stops zero-padding the counter, so a local copy of the
-    rule would have called ``Hull.1000`` a clean name and the test would have
-    agreed with a bug instead of catching it.
+    Asks the production rule rather than restating it: past ``.999`` Blender
+    stops zero-padding the counter, so a local copy matching exactly three
+    digits would call ``Hull.1000`` clean and agree with a bug instead of
+    catching it.
     """
     return [n for n in names if is_duplicate_material_name(n)]
 
@@ -186,14 +180,11 @@ check("re-imported model is fully textured",
       f"textured={sorted(textured)} of {material_names()}")
 
 # --- 5. a material the USER made is reused, and left exactly as it is ------
-# Sharing a name with a texture is a coincidence, not consent. The user's own
-# Hull is used by their own objects too, so wiring an image into it changes
-# every one of them because of an import that has nothing to do with them.
-#
-# The shading is authored here rather than left at the default: ``use_nodes``
-# cannot carry the assertion, because from Blender 5.x a material always uses
-# nodes and setting the property False is ignored. What the user actually loses
-# in that bug is their node tree, so that is what is checked.
+# Sharing a name with a texture is a coincidence, not consent: wiring an image
+# into the user's own Hull changes every object of theirs that uses it. The
+# shading is authored rather than left at the default because ``use_nodes``
+# cannot carry the assertion -- from Blender 5.x a material always uses nodes and
+# setting it False is ignored -- and the node tree is what the user loses.
 wipe()
 shaded = bpy.data.materials.new(name=source.textures[0])
 shaded.use_nodes = True
@@ -245,12 +236,9 @@ check("the user was told what happened, through the operator and not only the "
       str([msg for _, msg in op.reports]))
 
 # --- 5b. and it is still theirs on the SECOND import ----------------------
-# The bug this half exists for did not show up on the import that spared the
-# material -- it showed up on the next one. Authorship was read off the texture
-# key, and adoption writes the texture key, so the user's material came back
-# from import 1 wearing what import 2 took for the add-on's own signature and
-# wired an image into it after all. Nothing about the scene changed in between,
-# so importing twice is the whole reproduction.
+# The bug this half exists for showed up on the import *after* the one that
+# spared the material: authorship was read off the texture key, and adoption
+# writes that key, so import 2 took it for the add-on's own signature.
 op2 = FakeImportOp()
 load_pof(bpy.context, MODEL, op2)
 check("a second import still creates no duplicate materials",
@@ -271,10 +259,10 @@ check("the second import told the user too, rather than going quiet",
       str([msg for _, msg in op2.reports]))
 
 # --- 5c. a hand-pinned texture ID is honoured, and its owner warned --------
-# The docs invite a user to set d3_texture by hand to pin an export name. That
-# pin must not read as permission to edit the material, and when it disagrees
-# with the texture being imported the user has to hear about it -- their faces
-# are about to export as something other than what the model called them.
+# The docs invite setting d3_texture by hand to pin an export name. The pin is
+# not permission to edit the material, and when it disagrees with the texture
+# being imported the user has to hear about it -- their faces are about to export
+# as something other than what the model called them.
 wipe()
 pinned = bpy.data.materials.new(name=source.textures[0])
 pinned[PROP_KEY_TEXTURE] = "some_other_bitmap"
@@ -291,8 +279,8 @@ check("the user is warned that the pin redirects those faces",
       str([msg for _, msg in op3.reports]))
 
 # --- 6. a material THIS ADD-ON made is finished off, not left blank --------
-# The other half of the same rule: the authorship mark says the add-on built
-# this datablock, so attaching the image it was always meant to have changes
+# The other half of the same rule: the authorship mark says the add-on built the
+# datablock, so attaching the image it was always meant to have overrides
 # nothing the user decided.
 wipe()
 ours = bpy.data.materials.new(name=source.textures[0])
@@ -317,9 +305,9 @@ check("import marks every material it creates as its own",
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 # Hand-duplicate a material the way a user might, and point a face at it. The
-# recorded texture ID is stripped: a copy made today inherits it and exports
-# straight back to the original, so dropping it is what leaves the ``.NNN``
-# heuristic -- the rule this scenario is here to exercise -- in charge.
+# recorded texture ID is stripped because a copy inherits it and would export
+# straight back to the original, leaving the ``.NNN`` heuristic -- the rule this
+# scenario exercises -- in charge.
 original = bpy.data.materials[source.textures[0]]
 dupe = original.copy()          # Blender names this "<texture>.001"
 del dupe[PROP_KEY_TEXTURE]
@@ -348,10 +336,9 @@ check("and it resolves to the original texture",
       polluted.textures[face0.texnum] if face0.textured else "untextured")
 
 # --- 8. two REAL textures that merely look like duplicates both survive ----
-# Descent 3 ships bitmaps called both "metal" and "metal.001". Read by name
-# alone the second is a Blender duplicate of the first, and export merged them,
-# repointed its faces and lost a texture from the model. The recorded ID is
-# what tells the two cases apart, so here the clone stands for its own bitmap.
+# Descent 3 ships bitmaps called both "metal" and "metal.001". By name alone the
+# second reads as a Blender duplicate, and export merged them, repointed its
+# faces and lost a texture; the recorded ID is what tells the two cases apart.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 original = bpy.data.materials[source.textures[0]]
@@ -375,9 +362,8 @@ check("the face keeps the texture its material records",
 
 # --- 9. an ORPHAN duplicate must NOT be collapsed onto a missing original --
 # Hull.001 with no Hull: merging would invent a texture the scene never had and
-# fuse two distinct materials. Export verbatim and warn instead. As in 7, the
-# recorded ID is stripped so this is the heuristic being tested and not
-# provenance quietly answering for it.
+# fuse two distinct materials, so it is exported verbatim with a warning. As in
+# 7, the recorded ID is stripped so the heuristic is what answers.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 original = bpy.data.materials[source.textures[0]]
@@ -387,7 +373,7 @@ orphan_name = orphan.name
 mesh_obj = next(o for o in bpy.data.objects if o.type == "MESH")
 mesh_obj.data.materials.append(orphan)
 mesh_obj.data.polygons[0].material_index = len(mesh_obj.data.materials) - 1
-bpy.data.materials.remove(original)      # delete the original it was cloned from
+bpy.data.materials.remove(original)
 check("orphan duplicate exists with no original",
       bpy.data.materials.get(source.textures[0]) is None
       and bpy.data.materials.get(orphan_name) is not None, orphan_name)
@@ -402,11 +388,10 @@ check("no texture was invented for the deleted original",
 
 # --- 10. a slot a MODIFIER added is still a texture the model uses ---------
 # Geometry comes from the evaluated object, so a Boolean set to transfer
-# materials -- or a Geometry Nodes Set Material -- produces faces whose
-# ``material_index`` points into the *evaluated* slot list. Reading the slots off
-# the original object then finds a shorter list: those faces exported flat grey
-# and their texture never reached the TXTR chunk, with nothing said about either,
-# for a model the viewport showed fully textured.
+# materials -- or a Geometry Nodes Set Material -- gives faces a
+# ``material_index`` into the *evaluated* slot list. Reading the slots off the
+# original object finds a shorter one: those faces exported flat grey and their
+# texture never reached the TXTR chunk, silently.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 host = next(o for o in bpy.data.objects if o.type == "MESH")

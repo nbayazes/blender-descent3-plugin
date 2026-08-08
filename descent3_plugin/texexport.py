@@ -1,39 +1,27 @@
 """Writing texture images out beside an exported model.
 
 Export writes texture *names* into the model's TXTR chunk; this writes the
-pixels those names refer to, so a model and the images it needs can be handed
-over together.
+pixels those names refer to.
 
-Three things about Blender's image API make this less obvious than it looks,
-and every one of them fails silently rather than raising:
+Three silent traps in Blender's image API shape this module:
 
-1. ``Image.save(filepath=...)`` **ignores** ``file_format``. Setting a copy's
-   format to ``TARGA`` and saving to ``Hull.tga`` writes PNG bytes into a file
-   named ``.tga`` -- verified by inspecting the magic number. Descent 3 would
-   reject it, and nothing in Blender would have complained.
-2. ``Image.save_render()`` *does* convert, but it renders through the scene's
-   colour management. Blender 5.2 ships with the view transform defaulting to
-   **AgX**, so textures would come out tone-mapped and washed out. Only
+1. ``Image.save(filepath=...)`` **ignores** ``file_format`` -- a copy set to
+   ``TARGA`` and saved to ``Hull.tga`` gets PNG bytes, which the game rejects.
+2. ``Image.save_render()`` does convert, but through the scene's colour
+   management, and Blender 5.2 defaults the view transform to **AgX**. Only
    ``Standard`` reproduces the original pixels byte-for-byte.
-3. ``save_render`` obeys the *rest* of the scene's output settings too, not
-   just its file format. ``color_mode`` and ``color_depth`` come from the same
-   Output Properties panel the user configured for rendering, so a scene left
-   on RGB -- or on BW, after somebody rendered a matte -- writes every texture
-   with its alpha channel discarded. A grate exports solid, a canopy exports
-   opaque, and the file opens perfectly well in an image viewer: it is only
-   wrong once the game reads it.
+3. ``save_render`` obeys the scene's ``color_mode`` and ``color_depth`` too, so
+   a scene left on RGB -- or BW -- writes every texture with alpha discarded.
 
-So conversion goes through ``save_render`` with both colour management and the
-output settings neutralised and restored afterwards, and the common case -- a
-source file already in the requested format and with no unsaved edits -- skips
-Blender entirely and copies the bytes.
+Conversion therefore neutralises both colour management and the output settings
+and restores them afterwards; a source file already in the requested format and
+with no unsaved edits skips Blender and is copied byte-for-byte.
 
-A texture ID is also a *filename* here, and it arrives from a TXTR chunk in a
-model of unknown provenance or from a material name somebody typed. Every one
-is put through :func:`~descent3_plugin.naming.rejected_texture_name` before it
-is joined onto the export folder, and the path that join produces is checked
-against the folder again afterwards, because the failure being guarded is
-overwriting a file elsewhere on the disk without asking.
+A texture ID is also a *filename*, and arrives from a TXTR chunk of unknown
+provenance or a typed material name. Each goes through
+:func:`~descent3_plugin.naming.rejected_texture_name` before being joined onto
+the export folder, and the joined path is re-checked against that folder,
+because the failure guarded against is overwriting a file elsewhere on disk.
 """
 
 import logging
@@ -56,39 +44,27 @@ NEUTRAL_VIEW_TRANSFORM = "Standard"
 NEUTRAL_LOOK = "None"
 
 #: Channel layout every texture is written with, whatever Output Properties
-#: says. RGBA rather than RGB because a Descent 3 texture's alpha is not
-#: decoration -- it is what makes a grate see-through and a canopy glass -- and
-#: both formats this add-on writes carry it.
+#: says. RGBA rather than RGB because a Descent 3 texture's alpha is what makes
+#: a grate see-through and a canopy glass, and both formats written carry it.
 NEUTRAL_COLOR_MODE = "RGBA"
 
-#: Bits per channel. Eight is what the game reads, and it is what the source
-#: art almost always came in at; a scene set up for 16-bit PNG renders would
-#: otherwise spend twice the disk space on precision that was never there and
-#: hand Descent 3 a file it cannot load.
+#: Bits per channel. Eight is what the game reads; a scene set up for 16-bit
+#: PNG renders would otherwise hand Descent 3 a file it cannot load.
 NEUTRAL_COLOR_DEPTH = "8"
 
 #: Blender's default name for the Principled node in a new material tree.
-#:
-#: Import has its own copy of this. Duplicating one string is the cheaper half
-#: of the trade: importing it from :mod:`descent3_plugin.import_pof` would make
-#: every export drag the importer in behind it, for a constant that is fixed by
-#: Blender rather than by either module.
+#: Deliberately duplicated in :mod:`descent3_plugin.import_pof` rather than
+#: shared, so every export does not drag the importer in behind it.
 PRINCIPLED_BSDF_NODE_NAME = "Principled BSDF"
 
-#: Socket types that can carry a colour, and so can lead to the image a material
-#: is textured with.
-#:
-#: What the first pass of the walk behind Base Color is restricted to; a second
-#: pass without the restriction follows if that finds nothing, so this narrows
-#: the search order rather than the search. It is what stops a Mix node handing
-#: over its mask: ``ShaderNodeMix`` lists Factor first -- socket 0 of ten, since
-#: the node keeps one input set per data type -- so a walk taking its inputs in
-#: the order Blender stores them reaches whatever drives the blend before either
-#: of the images being blended.
-#:
-#: ``SHADER`` is here because a Mix Shader is a perfectly ordinary way to layer
-#: two textured shaders, and the image is then two links further back on the
-#: shader side rather than the Fac side.
+#: Socket types that can carry a colour, and so can lead to a material's image.
+#: The walk behind Base Color takes a first pass restricted to these and an
+#: unrestricted second pass, narrowing the search order rather than the search.
+#: That is what stops a Mix node handing over its mask: ``ShaderNodeMix`` keeps
+#: one input set per data type -- ten sockets, not three, largely duplicate A/B
+#: pairs -- and lists Factor as socket 0, ahead of either image being blended.
+#: ``SHADER`` is here because a Mix Shader is an ordinary way to layer two
+#: textured shaders.
 COLOUR_SOCKET_TYPES = frozenset({"RGBA", "SHADER"})
 
 
@@ -96,9 +72,8 @@ class _NeutralColourManagement:
     """Temporarily disable colour management for the duration of a save.
 
     ``save_render`` has no way to bypass the scene's display transform, so the
-    scene is adjusted and restored. Every field is put back in a ``finally``, so
-    an error mid-export cannot leave the user's scene tone-mapped differently
-    than they left it.
+    scene is adjusted and every field restored on exit -- an error mid-export
+    must not leave the user's scene tone-mapped differently than they left it.
     """
 
     def __init__(self, scene: bpy.types.Scene) -> None:
@@ -145,17 +120,13 @@ class _NeutralColourManagement:
 class _NeutralImageSettings:
     """Temporarily point the scene's output settings at a texture file.
 
-    ``save_render`` encodes through ``scene.render.image_settings``, which is
-    the very block the user set up in Output Properties for rendering their
-    animation. Overriding ``file_format`` alone is not enough: ``color_mode``
-    and ``color_depth`` survive, so a scene on RGB drops the alpha channel from
-    every texture written and a scene on 16-bit writes files the game will not
-    load. Neither raises and neither is visible in the result until something
-    that should be transparent is not.
+    ``save_render`` encodes through ``scene.render.image_settings`` -- the block
+    the user set up in Output Properties. Overriding ``file_format`` alone is
+    not enough: a surviving ``color_mode`` of RGB drops alpha from every texture
+    and a 16-bit ``color_depth`` writes files the game will not load, silently.
 
     Restoration puts ``file_format`` back *first*: the valid ``color_mode`` and
-    ``color_depth`` members depend on it, so the saved pair is only assignable
-    again once the format it was read under is back in place.
+    ``color_depth`` members depend on it.
     """
 
     def __init__(self, scene: bpy.types.Scene, fmt: str) -> None:
@@ -181,10 +152,8 @@ class _NeutralImageSettings:
                 setattr(settings, key, value)
             except TypeError:
                 # A format that cannot represent the neutral value leaves the
-                # scene's own setting in force. Say so: the texture is about to
-                # be written with whatever the user had configured for
-                # rendering, which is exactly the silent conversion this class
-                # exists to prevent.
+                # scene's own setting in force -- exactly the silent conversion
+                # this class exists to prevent, so say so.
                 log.warning(
                     "Format %s has no '%s' %s; that texture is written with the "
                     "scene's own setting instead.",
@@ -211,9 +180,8 @@ def _find_principled(mat: bpy.types.Material) -> bpy.types.Node | None:
         mat: Material to search. Must use nodes; the caller has checked.
 
     Returns:
-        The node, or ``None`` if the material has no Principled BSDF -- an
-        emission-only or hand-built shader, where nothing here can say which
-        image is "the" colour and the caller falls back to guessing.
+        The node, or ``None`` for an emission-only or hand-built shader, where
+        nothing here can say which image is "the" colour one.
     """
     node = mat.node_tree.nodes.get(PRINCIPLED_BSDF_NODE_NAME)
     if node is not None and node.type == "BSDF_PRINCIPLED":
@@ -227,27 +195,20 @@ def _find_principled(mat: bpy.types.Material) -> bpy.types.Node | None:
 def _image_behind_base_colour(mat: bpy.types.Material) -> bpy.types.Image | None:
     """Return the image that actually drives the material's Base Color.
 
-    The search walks backwards from the Base Color socket, breadth-first, so the
-    image *nearest* the shader wins -- but it follows the colour-carrying links
-    to exhaustion before it will look at any other kind. That is what makes a Mix
-    node give up its base layer rather than its mask: a Mix's sockets start with
-    Factor, so a search that took its inputs in the order Blender stores them
-    picked whatever drives the *blend* -- a greyscale mask, in the standard
-    layering setup -- and exported that as the model's texture, which is a worse
-    answer than the naive first-image rule it replaced. A chain through a
-    reroute, a Gamma or a Hue/Saturation is followed without needing to know what
-    any of those nodes do: only the links and the socket types are consulted,
-    which is what keeps this right for node types the add-on has never heard of.
+    Walks backwards from Base Color breadth-first, so the image *nearest* the
+    shader wins, but exhausts the colour-carrying links before looking at any
+    other kind. Only links and socket types are consulted, so a chain through a
+    reroute, a Gamma or a node type the add-on has never heard of is followed
+    without needing to know what it does.
 
     Args:
         mat: Material to inspect. Must use nodes; the caller has checked.
 
     Returns:
         The image, or ``None`` when nothing image-shaped feeds Base Color --
-        including the case of a texture hidden inside a node group, whose
-        internal tree is deliberately not descended into. Every ``None`` sends
-        the caller to :func:`_first_linked_image`, so a material this cannot
-        read is no worse off than it was before the search existed.
+        including a texture inside a node group, which is deliberately not
+        descended into. Every ``None`` sends the caller to
+        :func:`_first_linked_image`.
     """
     bsdf = _find_principled(mat)
     if bsdf is None:
@@ -257,14 +218,9 @@ def _image_behind_base_colour(mat: bpy.types.Material) -> bpy.types.Image | None
         return None
 
     start = [link.from_node for link in socket.links]
-    # Two passes rather than one with the colour links merely queued first: a
-    # colour-corrected diffuse is one node further from the shader than the mask
-    # on the Mix's Factor beside it, so "nearest, colour preferred" would still
-    # come back with the mask. Exhausting the colour side first is what makes the
-    # preference mean something. The second pass then still finds an image that
-    # reaches Base Color through something this cannot recognise as colour, which
-    # is better than sending an ordinary material to the guess in
-    # :func:`_first_linked_image`.
+    # Two passes rather than one queue with colour merely first: a mask on a
+    # Mix's Factor can sit nearer the shader than a colour-corrected diffuse, so
+    # "nearest, colour preferred" would still come back with the mask.
     return (
         _nearest_image(start, colour_only=True)
         or _nearest_image(start, colour_only=False)
@@ -277,16 +233,13 @@ def _nearest_image(
     """Search backwards through a node tree for the nearest image.
 
     Args:
-        start_nodes: Nodes to start from -- whatever feeds the socket being
-            traced.
         colour_only: Follow only inputs whose type is in
             :data:`COLOUR_SOCKET_TYPES`, ignoring factors, vectors and scalars.
 
     Returns:
         The image on the nearest reachable image-texture node, or ``None``.
-        Breadth-first, so "nearest" is by number of links rather than by
-        whatever order the nodes happen to sit in the tree. A node group's
-        internal tree is deliberately not descended into.
+        Breadth-first, so "nearest" counts links rather than tree order. A node
+        group's internal tree is deliberately not descended into.
     """
     # Node names are unique within a tree, so they identify a visited node
     # without relying on bpy structs comparing the way a set needs them to.
@@ -309,19 +262,17 @@ def _nearest_image(
 def _first_linked_image(mat: bpy.types.Material) -> bpy.types.Image | None:
     """Return the first connected image in the tree, as a last resort.
 
-    This is a guess, and it is only reached for a material whose Base Color
-    leads nowhere: no Principled BSDF, an unconnected socket, or a chain that
-    ends somewhere this module cannot follow. Guessing beats returning nothing,
-    because the alternative for a material that plainly has a texture on it is
-    to report it as having none and export the model without its image.
+    A guess, reached only when Base Color leads nowhere: no Principled BSDF, an
+    unconnected socket, or a chain this module cannot follow. It beats reporting
+    a material that plainly has a texture on it as having none.
 
     Args:
         mat: Material to inspect. Must use nodes; the caller has checked.
 
     Returns:
         The first image-texture node's image, preferring one with a linked
-        output so a stray unconnected texture node left over from experimenting
-        does not win over a node that is wired into something.
+        output so a stray unconnected node left over from experimenting does not
+        win over one that is wired into something.
     """
     unlinked = None
     for node in mat.node_tree.nodes:
@@ -338,16 +289,11 @@ def _image_for_material(mat: bpy.types.Material) -> bpy.types.Image | None:
     """Return the image driving a material's colour, if it has one.
 
     Descent 3 gives a face one texture, so exactly one image out of a PBR
-    material has to be picked, and it must be the colour one. Taking the first
-    linked image-texture node instead -- which is all this used to do -- reads
-    whichever node was *created* first, so a material whose Normal Map was set
-    up before its Base Color exported the normal map as the game texture: a
-    model that renders lilac and wrong, from a .blend that looks perfect in the
-    viewport. Base Color is therefore followed properly, and the old rule is
-    kept only for materials that leave it unconnected.
-
-    Args:
-        mat: Material to inspect.
+    material has to be picked and it must be the colour one. The old rule --
+    first linked image-texture node -- reads whichever node was *created* first,
+    so a material whose Normal Map predated its Base Color exported the normal
+    map as the game texture. It is kept only as the fallback for a material
+    whose Base Color leads nowhere.
 
     Returns:
         The image, or ``None`` when the material has no image texture at all.
@@ -359,9 +305,6 @@ def _image_for_material(mat: bpy.types.Material) -> bpy.types.Image | None:
 
 def _source_path(image: bpy.types.Image) -> str | None:
     """Return the image's source file on disk, if it has a usable one.
-
-    Args:
-        image: Image to resolve.
 
     Returns:
         An absolute path, or ``None`` when the image is packed, generated, or
@@ -383,21 +326,17 @@ def _rejected_destination(directory: str, destination: str) -> str | None:
     """Return why ``destination`` is not safely inside ``directory``, or None.
 
     :func:`~descent3_plugin.naming.rejected_texture_name` has already refused
-    every texture ID that could climb out of the export folder, so reaching
-    here with a problem means something got past it: a symlinked folder, a path
-    form some future Windows learns to interpret, a caller that forgot the
-    check. It is worth checking twice because of what the first check is
-    preventing -- a file overwritten somewhere the user is not looking, without
-    a prompt and without a trace of what used to be there.
-
-    So the join is re-examined against what the filesystem says the two paths
-    actually resolve to, rather than against what they were spelled as.
+    every texture ID that could climb out of the export folder, so a problem
+    here means something got past it: a symlinked folder, a path form some
+    future Windows learns to interpret, a caller that forgot the check. The
+    join is therefore re-examined against what the filesystem resolves the two
+    paths to rather than how they were spelled, because the failure being
+    guarded is a file overwritten where the user is not looking.
 
     Args:
         directory: Export folder the file is meant to land in. It need not
             exist yet; both sides resolve the same way either way, since the
             folder is only created once a write is about to happen.
-        destination: Path the write would use.
 
     Returns:
         A message describing the problem, or ``None`` when the file lands
@@ -429,20 +368,17 @@ def export_textures(
 
     Args:
         materials: Texture ID to the material carrying its image. The key is the
-            name written to the TXTR chunk, so the file is named after it and
-            import finds it again -- which is also why it is validated as a
-            filename here rather than sanitised into one.
-        directory: Folder to write into. Created when the first texture is
-            actually written, so an export where every texture fails leaves no
-            empty folder sitting beside the model implying otherwise.
+            name written to the TXTR chunk and becomes the filename, which is
+            why it is validated as one here rather than sanitised into one.
+        directory: Folder to write into. Created only when the first texture is
+            actually written, so a wholly failed export leaves no empty folder
+            beside the model implying otherwise.
         fmt: Key of :data:`~descent3_plugin.naming.TEXTURE_FORMATS`.
         scene: Scene whose colour management is borrowed for conversion.
 
     Returns:
-        A ``(written, problems)`` pair. ``written`` holds the filenames created;
-        ``problems`` holds one message per texture that could not be written, so
-        the caller can report them rather than leaving the user to discover a
-        half-populated folder.
+        A ``(written, problems)`` pair: the filenames created, and one message
+        per texture that could not be written, for the caller to report.
     """
     written: list[str] = []
     problems: list[str] = []
@@ -451,10 +387,9 @@ def export_textures(
     for texture_name in sorted(materials):
         problem = rejected_texture_name(texture_name)
         if problem:
-            # Judged on the name, not only on the path it produces. A rejected
-            # path can only report that something would land somewhere else;
-            # the name can say which texture is at fault and what about it is
-            # wrong, which is what the user has to go and rename.
+            # Judged on the name, not only on the path it produces: a rejected
+            # path can only say the file would land somewhere else, while the
+            # name can say which texture the user has to go and rename.
             problems.append(f"{texture_name}: {problem}")
             continue
 
@@ -502,16 +437,12 @@ def _copy_or_convert(
 ) -> bool:
     """Write ``image`` to ``destination`` in ``fmt``.
 
-    A source file already in the requested format is copied byte-for-byte: no
-    re-encode, no colour management, no chance of the conversion traps this
-    module exists to avoid. Anything else is converted, and so is an image with
-    unsaved edits -- Texture Paint keeps them in the datablock until somebody
-    saves, so the file on disk is still the version from before the artist
-    picked up a brush, and copying it exports art that has not existed since
-    the session started.
+    A source file already in the requested format is copied byte-for-byte,
+    sidestepping the conversion traps this module exists to prevent. An image
+    with unsaved edits is converted instead: Texture Paint keeps them in the
+    datablock, so the file on disk predates whatever the artist painted.
 
     Args:
-        image: Image to write.
         destination: Full path of the file to create. The caller has already
             established that it is inside the export folder.
         fmt: Key of :data:`~descent3_plugin.naming.TEXTURE_FORMATS`.

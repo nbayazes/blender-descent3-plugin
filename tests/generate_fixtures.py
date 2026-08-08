@@ -7,6 +7,9 @@ Unlike ``generate_mock_pof.py`` (which hand-writes bytes), this uses the real
 ``poformat.write_pof`` writer so the .oof matches the genuine on-disk format
 (length-prefixed, NUL-terminated strings, v23 layout).
 
+One-shot generator: the output is tracked in git and the tests read those
+checked-in files directly, so re-run this only to change the fixture itself.
+
 Run:  python tests/generate_fixtures.py
 Output: tests/fixtures/textured_model/{textured_cube.oof, Hull.png, Turret.png}
 """

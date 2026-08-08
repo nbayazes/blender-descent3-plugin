@@ -26,10 +26,6 @@ from .mathutil import Vector3
 
 log = logging.getLogger(__package__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 POF_MAGIC = b"PSPO"
 
 #: Oldest file version this parser accepts. Engine: ``PM_COMPATIBLE_VERSION``
@@ -40,32 +36,18 @@ MIN_OBJFILE_VERSION = 1807
 #: (polymodel.h:306).
 OBJFILE_VERSION = 2300
 
-# ---------------------------------------------------------------------------
-# Version gates
-# ---------------------------------------------------------------------------
-# A POF version is ``major * 100 + minor``. Several record layouts changed over
-# the format's life, and both the reader and the writer have to branch on the
-# same thresholds or the two disagree about how many bytes a record occupies.
-
-#: Divisor of the ``major * 100 + minor`` encoding.
+#: A POF version is ``major * 100 + minor``. Record layouts changed over the
+#: format's life, so reader and writer must branch on the same thresholds or
+#: they disagree about how many bytes a record occupies.
 VERSION_MAJOR_SCALE = 100
 
 #: A header value below this is a bare major version from a pre-release tool and
-#: is scaled up by :data:`VERSION_MAJOR_SCALE` before use.
-#:
-#: No file reaches the rest of the parser through that path, and none can: the
-#: largest value it can produce is ``17 * 100 = 1700``, which the
-#: :data:`MIN_OBJFILE_VERSION` check then rejects. The rescale is therefore dead
-#: in every sense except one -- it is dead in the engine too, and identically so.
-#: ``ReadNewModelFile`` (reference/polymodel.cpp:1288) tests ``version < 18``,
-#: multiplies by 100, logs "Old POF Version of %d fixed up to %d", and then
-#: refuses anything under ``PM_COMPATIBLE_VERSION``, which is 1807.
-#:
-#: Kept because this parser's job is to accept what the game accepts, and the
-#: two are easiest to check against each other when they are shaped the same. If
-#: pre-1807 files are ever meant to load, the constant to move is
-#: :data:`MIN_OBJFILE_VERSION` -- and the engine would have to move with it, or
-#: this add-on would open models Descent 3 will not.
+#: is scaled up by :data:`VERSION_MAJOR_SCALE`. Unreachable in practice: the
+#: largest result, 1700, then fails the :data:`MIN_OBJFILE_VERSION` check. Kept
+#: because the engine is dead here identically -- ``ReadNewModelFile``
+#: (reference/polymodel.cpp:1288) rescales and then refuses anything under 1807.
+#: To load pre-1807 files, lower ``MIN_OBJFILE_VERSION``, not this one: the
+#: parser deliberately accepts exactly what the engine accepts.
 MAX_UNSCALED_VERSION = 18
 
 #: Above this version each SOBJ record carries a ``geometric_center`` vector.
@@ -92,10 +74,9 @@ MAJOR_VERSION_VERTEX_ALPHA = 23
 class VersionFeatures:
     """Which optional fields a given POF version's record layout carries.
 
-    The reader and the writer must agree on every one of these or they disagree
-    about how many bytes a record occupies, which corrupts everything after it.
-    Both derive their answer from :func:`features_for`, so a threshold can only
-    be changed in one place.
+    Reader and writer both derive their answer from :func:`features_for`, so a
+    threshold can only be changed in one place; disagreeing about one of these
+    corrupts everything after the record.
 
     Attributes:
         geometric_center: SOBJ carries a ``geometric_center`` vector.
@@ -118,21 +99,18 @@ def features_for(version: int, major_version: int | None = None) -> VersionFeatu
 
     Args:
         version: Full ``major * 100 + minor`` version.
-        major_version: Major version. Defaults to ``version //
-            VERSION_MAJOR_SCALE``. It is a separate argument because
-            :class:`POFModel` stores both and a caller can set them
-            independently; passing it keeps this consistent with whichever
-            value the model actually carries.
+        major_version: Defaults to ``version // VERSION_MAJOR_SCALE``. Separate
+            because :class:`POFModel` stores both and a caller can set them
+            independently.
 
     Returns:
         The feature set for that version.
 
     Note:
-        The comparisons are not uniform, and that is deliberate rather than an
-        oversight: ``geometric_center`` is *strictly* greater than its
-        threshold, and it and ``gunpoint_parent`` test the full version while
-        the rest test the major version. This mirrors the engine and the
-        layouts these gates have always produced.
+        The comparisons are deliberately not uniform: ``geometric_center`` is
+        *strictly* greater than its threshold, and it and ``gunpoint_parent``
+        test the full version while the rest test the major version. This
+        mirrors the engine.
     """
     if major_version is None:
         major_version = version // VERSION_MAJOR_SCALE
@@ -144,7 +122,6 @@ def features_for(version: int, major_version: int | None = None) -> VersionFeatu
         vertex_alpha=major_version >= MAJOR_VERSION_VERTEX_ALPHA,
     )
 
-# Chunk IDs (four-character codes as 32-bit ints, little-endian)
 def _fcc(s: str) -> int:
     """Convert a four-character code to its little-endian 32-bit integer.
 
@@ -152,8 +129,8 @@ def _fcc(s: str) -> int:
         s: Exactly four ASCII characters, e.g. ``"SOBJ"``.
 
     Returns:
-        The code reinterpreted as an unsigned 32-bit little-endian integer,
-        which is how chunk IDs appear in the byte stream.
+        The code as an unsigned 32-bit little-endian int, which is how chunk
+        IDs appear in the byte stream.
     """
     return struct.unpack("<I", s.encode("ascii"))[0]
 
@@ -202,10 +179,6 @@ PMF_FACING        = 8
 PMF_NOT_RESIDENT  = 16
 PMF_SIZE_COMPUTED = 32
 
-# ---------------------------------------------------------------------------
-# Field sentinels and limits
-# ---------------------------------------------------------------------------
-
 #: ``Submodel.parent`` value meaning "this is a root submodel".
 NO_PARENT = -1
 
@@ -237,21 +210,17 @@ COLOR_CHANNEL_MAX = 255
 MAX_STRING_LENGTH = 10000
 
 #: Bytes in the smallest field a POF record is built from -- an ``int32``, a
-#: float, or one component of a vector. Element counts are bounds-checked
-#: against the bytes the stream still holds in multiples of this, so a call site
-#: can state a record's size as the number of fields it cannot be smaller than
-#: without repeating the record layout a second time.
+#: float, or one vector component. Element counts are bounds-checked against
+#: the remaining bytes in multiples of this, so a call site states a record's
+#: minimum size in fields without repeating the layout.
 SIZEOF_FIELD = 4
 
-#: Highest index a SOBJ record may claim for itself. ``model.submodels`` is
-#: grown with ``None`` placeholders up to whatever index a record names, so an
-#: unchecked index is an allocation the *file* chooses: ``2**31 - 1``
-#: placeholders is tens of gigabytes of list. The engine's own ceiling is far
-#: lower -- ``MAX_SUBOBJECTS`` is 30 (polymodel_external.h:76) and a model above
-#: it is refused outright (polymodel.cpp:2044) -- but this parser stays
-#: deliberately looser than the game, so an over-built model can still be opened
-#: in Blender and cut down there. Past this, the field is corruption rather than
-#: ambition.
+#: Highest index a SOBJ record may claim. ``model.submodels`` is grown with
+#: ``None`` placeholders up to whatever index a record names, so an unchecked
+#: index lets the file allocate ``2**31 - 1`` list slots. Deliberately looser
+#: than the engine's ``MAX_SUBOBJECTS`` of 30 (polymodel_external.h:76, refused
+#: at polymodel.cpp:2044) so an over-built model can still be opened and cut
+#: down in Blender.
 MAX_SUBMODEL_INDEX = 4095
 
 #: Largest ``$rotate=`` spin rate accepted. Values outside ``0 < rate <= 20``
@@ -269,37 +238,29 @@ MAX_WB_GUNPOINTS = 8
 #: Turrets kept per weapon battery -- a separate engine array of the same size.
 MAX_WB_TURRETS = 8
 
-#: Axis of the neutral key used to pad an empty animation track. Kept as a
-#: plain tuple so each *call* builds its own :class:`Vector3`; a module-level
-#: ``Vector3`` would be shared by every model padded in the session, where a
-#: single mutation would corrupt all of them. Within one call the padding keys
-#: still alias one another, exactly as before this was named. The value is
-#: arbitrary -- the key it belongs to has a zero angle, so any unit axis
-#: produces the same pose.
+#: Axis of the neutral key used to pad an empty animation track. A plain tuple
+#: so each call builds its own :class:`Vector3`; a module-level ``Vector3``
+#: would be shared by every model padded in the session, where one mutation
+#: corrupts all of them. That only fixes sharing *across* calls: within one
+#: call the padding repeats a single filler, so every padded key in a track is
+#: still the same object. The value is arbitrary -- the key has a zero angle,
+#: so any unit axis gives the same pose.
 DEFAULT_KEYFRAME_AXIS = (0.0, 0.0, 1.0)
-
-# ---------------------------------------------------------------------------
-# Submodel property commands
-# ---------------------------------------------------------------------------
 
 #: ``$rotate=`` carries a spin rate that has to pass a range check before
 #: :data:`SOF_ROTATE` is set, so it is handled separately from the table below.
 PROP_ROTATE = "$rotate="
 
-#: Property command -> ``SOF_*`` flag it sets, for every command whose flag
-#: depends only on the command being present. Keys are matched against the
-#: lower-cased command by equality. Commands that take a payload keep their
-#: trailing ``=`` because the command is split at the first ``=``; the payload
-#: itself is only consumed for ``$rotate=``, since nothing here needs the
-#: glow/thruster colors or the turret field of view.
+#: Property command -> ``SOF_*`` flag, for commands whose flag depends only on
+#: the command being present. Matched by equality against the lower-cased
+#: command; payload-taking commands keep their trailing ``=`` because the string
+#: is split at the first ``=``. Only ``$rotate=`` consumes its payload; nothing
+#: here needs the glow/thruster colours or the turret field of view.
 #:
-#: The engine's own chain (``SetPolymodelProperties``, polymodel.cpp:1003-1228)
-#: is mostly ``stricmp``, but uses bounded ``strnicmp`` prefix matches for
-#: ``$jitter`` (:1048), ``$shell`` (:1055), ``$facing`` (:1062) and
-#: ``$frontface`` (:1068), so it would also accept e.g. ``$shellfoo``. This
-#: table deliberately preserves the add-on's existing exact-match behaviour
-#: rather than adopting the engine's; changing it is a behaviour change, not a
-#: refactor.
+#: The engine (``SetPolymodelProperties``, polymodel.cpp:1003-1228) uses bounded
+#: ``strnicmp`` prefix matches for ``$jitter``, ``$shell``, ``$facing`` and
+#: ``$frontface``, so it also accepts e.g. ``$shellfoo``. Exact matching here is
+#: deliberate; loosening it is a behaviour change, not a refactor.
 PROPERTY_COMMAND_FLAGS = {
     "$jitter": SOF_JITTER,
     "$shell": SOF_SHELL,
@@ -321,19 +282,10 @@ PROPERTY_COMMAND_FLAGS = {
     "$custom": SOF_CUSTOM,
 }
 
-# ---------------------------------------------------------------------------
-# Data Classes
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Color:
-    """An RGB color with components in the 0..1 range.
-
-    Attributes:
-        r: Red component.
-        g: Green component.
-        b: Blue component.
-    """
+    """An RGB color with components in the 0..1 range."""
 
     r: float = 1.0
     g: float = 1.0
@@ -480,7 +432,6 @@ class Submodel:
     pos_track_max: int = 0
     keyframes: list[Keyframe] = field(default_factory=list)
 
-    # Computed children (not stored in file, built after parse)
     children: list[int] = field(default_factory=list)
 
 
@@ -584,8 +535,7 @@ class POFModel:
         Note:
             ``children`` holds submodel *indices* (``sm.index``), not positions
             in ``self.submodels``. SOBJ chunks can arrive out of order or with
-            gaps, so the two are not interchangeable, and callers look parents
-            up by index.
+            gaps, so the two are not interchangeable.
         """
         by_index = {sm.index: sm for sm in self.submodels}
         for sm in self.submodels:
@@ -595,9 +545,6 @@ class POFModel:
             if parent is not None:
                 parent.children.append(sm.index)
 
-# ---------------------------------------------------------------------------
-# Binary Reader
-# ---------------------------------------------------------------------------
 
 class POFReader:
     """Reads little-endian POF primitives from a binary stream.
@@ -605,9 +552,6 @@ class POFReader:
     Every read is bounds-checked through :meth:`read_bytes`, so a truncated or
     misaligned file raises :class:`EOFError` at the point of the short read
     rather than silently returning garbage.
-
-    Attributes:
-        stream: The underlying binary stream, positioned at the next read.
     """
 
     def __init__(self, stream: BinaryIO) -> None:
@@ -620,9 +564,6 @@ class POFReader:
 
     def read_bytes(self, n: int) -> bytes:
         """Read exactly ``n`` bytes.
-
-        Args:
-            n: Number of bytes to read.
 
         Returns:
             Exactly ``n`` bytes.
@@ -664,9 +605,8 @@ class POFReader:
         """Read a length-prefixed string.
 
         Writers disagree about whether the stored length counts a trailing NUL,
-        so the terminator is stripped after decoding rather than assumed. Bytes
-        that are not valid ASCII are substituted, matching the tolerance in
-        :meth:`POFWriter.write_string`.
+        so the terminator is stripped after decoding rather than assumed.
+        Non-ASCII bytes are substituted, as in :meth:`POFWriter.write_string`.
 
         Returns:
             The decoded string, without any trailing NUL.
@@ -686,26 +626,16 @@ class POFReader:
     def read_count(self, what: str, item_size: int = SIZEOF_FIELD) -> int:
         """Read an element count, refusing one the stream could not supply.
 
-        A count comes straight off disk and then decides how many times a loop
-        runs and how long a list grows, which makes a corrupt value a liveness
-        problem rather than a data one: a negative count silently skips its
-        loop and leaves every later read misaligned, and an enormous one grinds
-        through allocations until the short read that finally stops it.
-        :meth:`read_string` bounds its length prefix for the same reason.
-
-        The ceiling is the file's own remaining size rather than a fixed limit,
-        so no legitimate model is ever refused for being large: ``n`` records of
-        at least ``item_size`` bytes cannot be stored in fewer than
-        ``n * item_size`` bytes, whatever the rest of the layout does.
+        A corrupt count is a liveness problem, not just a data one: a negative
+        one skips its loop and misaligns every later read, an enormous one
+        grinds through allocations until the short read stops it. The ceiling is
+        the remaining file size rather than a fixed limit, so no legitimate
+        model is refused for being large.
 
         Args:
-            what: What is being counted, e.g. ``"vertex"``. Appears in the error
-                message and nowhere else.
-            item_size: Smallest number of bytes one counted record can occupy,
-                normally written as a multiple of :data:`SIZEOF_FIELD`. It is a
-                floor, not the exact size -- the check exists to refuse
-                impossible counts, not to describe every record twice, and a
-                short read still catches whatever slips past it.
+            item_size: Smallest number of bytes one counted record can occupy, a
+                floor rather than the exact size -- it only has to refuse
+                impossible counts; a short read catches whatever slips past.
 
         Returns:
             The count, non-negative and small enough that the remaining bytes
@@ -738,21 +668,13 @@ class POFReader:
     def read_chunk_header(self) -> tuple[int, int]:
         """Read a chunk header.
 
-        The sign is checked here rather than left to the caller because a
-        negative length is not merely bad data. :func:`parse_pof_stream` reaches
-        the next header by seeking to ``chunk_start + length``, so a negative one
-        seeks *backwards* onto the header it just read and the loop spins on it
-        forever -- pinning Blender's main thread at 100% CPU with no progress and
-        nothing to cancel, until the user kills Blender and loses whatever was
-        unsaved. There is no reading of the file that survives it: the offset the
-        loop is driven by is the very thing that is wrong.
-
-        A length merely running *past the end* is a different animal and is
-        deliberately not refused here, because whether it matters depends on
-        what the chunk is -- and this method does not know. Refusing it outright
-        turned a good model with a few junk bytes on the end into a file that
-        would not import at all. :func:`parse_pof_stream` makes that call
-        instead, with the chunk ID in hand.
+        A negative length is refused here because :func:`parse_pof_stream`
+        reaches the next header by seeking to ``chunk_start + length``: a
+        negative one seeks backwards onto the header just read and the loop
+        spins forever on Blender's main thread. A length running merely *past
+        the end* is deliberately allowed through -- whether that is fatal
+        depends on the chunk ID, which only the caller has; refusing it here
+        made a good model with junk bytes on the end unimportable.
 
         Returns:
             A ``(chunk_id, data_length)`` pair. The length excludes the eight
@@ -794,9 +716,6 @@ class POFReader:
         self.seek(here)
         return end - here
 
-# ---------------------------------------------------------------------------
-# Binary Writer
-# ---------------------------------------------------------------------------
 
 class POFWriter:
     """Writes little-endian POF primitives to a binary stream.
@@ -804,9 +723,6 @@ class POFWriter:
     Chunk bodies are built in a scratch :class:`io.BytesIO` and only then
     written with their length prefix, because a chunk header has to state the
     body size before the body exists.
-
-    Attributes:
-        stream: The underlying binary stream, positioned at the next write.
     """
 
     def __init__(self, stream: BinaryIO) -> None:
@@ -848,10 +764,9 @@ class POFWriter:
     def write_string(self, s: str) -> None:
         """Write a length-prefixed, NUL-terminated string.
 
-        The format is 8-bit ASCII but Blender object and material names are
-        UTF-8, so unrepresentable characters are substituted rather than
-        raising: losing an accent beats failing the whole export. The reader
-        decodes with the same tolerance.
+        The format is 8-bit ASCII but Blender names are UTF-8, so
+        unrepresentable characters are substituted rather than raising: losing
+        an accent beats failing the whole export.
         """
         try:
             raw = s.encode("ascii")
@@ -889,9 +804,6 @@ class POFWriter:
         """Move to absolute stream position ``pos``."""
         self.stream.seek(pos)
 
-# ---------------------------------------------------------------------------
-# Parsing Functions
-# ---------------------------------------------------------------------------
 
 def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     """Parse one SOBJ chunk and store the submodel on ``model``.
@@ -913,17 +825,13 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     Note:
         The submodel is stored at ``model.submodels[sm.index]``, growing the
         list with ``None`` placeholders as needed, because SOBJ chunks can
-        arrive out of order. :func:`parse_pof_stream` drops any placeholder that
-        is still unfilled once every chunk has been read.
+        arrive out of order. :func:`parse_pof_stream` drops any placeholder
+        still unfilled once every chunk has been read.
 
-        That storage is why the index is validated before anything else is
-        read. A negative index does not raise in Python, it *quietly
-        overwrites*: ``while len(model.submodels) <= -1`` never runs, and
-        ``model.submodels[-1] = sm`` replaces the last submodel parsed. Nothing
-        is left behind for the missing-placeholder warning to notice, so the
-        import reports the wrong submodel count, one subobject vanishes, and its
-        children fall back to no parent -- a turret sitting detached at the
-        model origin with not a word said about it.
+        That storage is why the index is validated first: a negative index does
+        not raise but quietly overwrites, since ``model.submodels[-1] = sm``
+        replaces the last submodel parsed and leaves no placeholder for the
+        missing-submodel warning to catch.
     """
     sm = Submodel()
     sm.index = reader.read_int32()
@@ -951,12 +859,10 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     sm.movement_type = reader.read_int32()
     sm.movement_axis = reader.read_int32()
 
-    # Skip freespace chunks
     n_chunks = reader.read_count("freespace chunk", SIZEOF_FIELD)
     for _ in range(n_chunks):
         reader.read_int32()
 
-    # Vertices
     n_verts = reader.read_count("vertex", SIZEOF_FIELD * 3)
     for _ in range(n_verts):
         pos = reader.read_vector3()
@@ -965,14 +871,12 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
     for i in range(n_verts):
         sm.vertices[i].normal = reader.read_vector3()
 
-    # Alpha per vertex (version >= 23)
     if features.vertex_alpha:
         for i in range(n_verts):
             sm.vertices[i].alpha = reader.read_float()
             if sm.vertices[i].alpha < ALPHA_OPAQUE_THRESHOLD:
                 model.flags |= PMF_ALPHA
 
-    # Faces
     n_faces = reader.read_count("face", SIZEOF_FIELD * 3)
     for _ in range(n_faces):
         face = ModelFace()
@@ -992,17 +896,14 @@ def _parse_subobj(reader: POFReader, model: POFModel, chunk_end: int) -> None:
             v = reader.read_float()
             face.vertices.append(FaceVertex(index=idx, u=u, v=v))
 
-        # Lightmap UV diffs (version >= 21)
         if features.lightmap_uv:
             reader.read_float()  # xdiff
             reader.read_float()  # ydiff
 
         sm.faces.append(face)
 
-    # Parse properties for flags
     _parse_submodel_flags(sm)
 
-    # Ensure index is within bounds
     while len(model.submodels) <= sm.index:
         model.submodels.append(None)
     model.submodels[sm.index] = sm
@@ -1012,15 +913,13 @@ def _parse_submodel_flags(sm: Submodel) -> None:
     """Set ``sm.flags`` from the ``$``-command in the submodel's property string.
 
     Only the first command is honoured, matching the engine: the string is split
-    at the first ``=`` into a command (including that ``=``) and its payload, and
-    the command is looked up case-insensitively. Everything except ``$rotate=``
-    is a straight command-to-flag mapping held in :data:`PROPERTY_COMMAND_FLAGS`.
+    at the first ``=`` into command (including that ``=``) and payload, and the
+    command is looked up case-insensitively in :data:`PROPERTY_COMMAND_FLAGS`.
 
     Args:
-        sm: Submodel whose ``props`` is read and whose ``flags`` is updated
-            in place. Unrecognised commands leave ``flags`` untouched -- the raw
-            string is still preserved, so a command this add-on does not model
-            survives a round trip.
+        sm: Updated in place. An unrecognised command leaves ``flags``
+            untouched; ``props`` is preserved either way, so a command this
+            add-on does not model still survives a round trip.
     """
     props = sm.props.strip()
     if len(props) < MIN_PROPS_LENGTH:
@@ -1052,10 +951,6 @@ def _parse_submodel_flags(sm: Submodel) -> None:
         sm.flags |= flag
 
 
-# ---------------------------------------------------------------------------
-# Main Parse / Write Functions
-# ---------------------------------------------------------------------------
-
 def parse_pof(data: bytes) -> POFModel:
     """Parse a POF file held in memory.
 
@@ -1080,28 +975,23 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
 
     Chunks are dispatched by ID; an unrecognised chunk is skipped by seeking to
     the end offset its own header declares, so an unfamiliar chunk costs data
-    but does not desynchronise the stream. Because that offset comes from the
-    file, every size this loop trusts is bounds-checked first -- see
-    :meth:`POFReader.read_chunk_header` and :meth:`POFReader.read_count`.
+    but does not desynchronise the stream. Every size that offset depends on is
+    bounds-checked first -- see :meth:`POFReader.read_chunk_header` and
+    :meth:`POFReader.read_count`.
 
-    The ways a size can be wrong get different answers, because they are not the
-    same problem. A size that would send the loop *backwards* is refused
-    outright: the loop is driven by those offsets, so guessing at a repair means
-    guessing where the next header is, and guessing wrong is what turned a bad
-    length into an unkillable spin. A size that runs off the end of the file
-    depends on whose chunk it is -- an unrecognised chunk is only ever skipped
-    over, so a body that is not there simply ends the chunk list with a warning
-    and everything already read is still a model; a chunk this parser does read
-    raises instead, because half a submodel record is not a submodel.
+    A size that would send the loop *backwards* is refused outright, since the
+    loop is driven by those offsets and a bad one spins forever. A size running
+    off the end of the file is tolerated only for an unrecognised chunk, which
+    is skipped anyway; a chunk this parser reads raises instead, because half a
+    submodel record is not a submodel.
 
     Args:
         stream: Readable, seekable stream positioned at the file header.
 
     Returns:
-        The parsed model, with its hierarchy already built. A file that ends
-        early, or that carries a tail which cannot be read as a chunk, yields
-        everything up to that point rather than nothing at all; the warning log
-        says where reading stopped.
+        The parsed model, with its hierarchy already built. A truncated file
+        yields everything up to that point rather than nothing at all, with a
+        warning saying where reading stopped.
 
     Raises:
         ValueError: If the magic bytes do not match :data:`POF_MAGIC`, if the
@@ -1114,7 +1004,6 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
     reader = POFReader(stream)
     model = POFModel()
 
-    # Read header
     magic = reader.read_bytes(4)
     if magic != POF_MAGIC:
         raise ValueError(f"Invalid POF magic: expected {POF_MAGIC!r}, got {magic!r}")
@@ -1135,7 +1024,6 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
     if features.timed_anim:
         model.flags |= PMF_TIMED
 
-    # Read chunks
     timed = features.timed_anim
 
     while True:
@@ -1143,10 +1031,9 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
         try:
             chunk_id, chunk_len = reader.read_chunk_header()
         except EOFError:
-            # Running out of chunks is how a well-formed file ends, so this is
-            # the normal exit. A clean end lands exactly on a chunk boundary,
-            # though -- leftover bytes mean a header was cut in half, and the
-            # model is silently missing whatever those chunks held.
+            # Normal exit: running out of chunks is how a well-formed file ends.
+            # A clean end lands exactly on a chunk boundary, so leftover bytes
+            # mean a header was cut in half and chunks are missing.
             reader.seek(pos)
             trailing = reader.bytes_remaining()
             if trailing > 0:
@@ -1156,11 +1043,9 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                     "past this point was not read.", trailing,
                 )
             elif trailing < 0:
-                # The previous chunk declared a body reaching past the end of
-                # the file and was read anyway -- it needed less of that body
-                # than it claimed -- so the seek to its end landed beyond EOF.
-                # Reporting that as "-40 trailing bytes" is worse than saying
-                # nothing; what the user needs to know is the same truncation.
+                # The previous chunk declared a body past EOF but needed less of
+                # it than claimed, so the seek to its end landed beyond EOF.
+                # Report that as truncation, not as "-40 trailing bytes".
                 log.warning(
                     "The last chunk's declared body runs %d byte(s) past the "
                     "end of the file. It is truncated and anything past this "
@@ -1272,9 +1157,8 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 else:
                     sm.num_key_pos = nframes
 
-                # Read exactly num_key_pos entries. A submodel can carry more
-                # position keys than rotation keys, so the existing keyframe
-                # list (built from ANIM) is extended rather than iterated.
+                # A submodel can carry more position keys than rotation keys, so
+                # the list built from ANIM is extended rather than iterated.
                 for k in range(sm.num_key_pos):
                     while len(sm.keyframes) <= k:
                         sm.keyframes.append(Keyframe())
@@ -1305,19 +1189,18 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
 
         elif chunk_id == CHUNK_NATH:
             # Read plainly rather than through read_count: the equality test
-            # below is already the bound, since it accepts exactly one value --
-            # the number of ATCH points, which the file has already paid for in
-            # bytes. Anything else, negative or absurd, takes the tolerant path
-            # instead of failing an import over optional up-vectors.
+            # below is already the bound, accepting only the ATCH point count.
+            # Anything else takes the tolerant path instead of failing an import
+            # over optional up-vectors.
             n_normals = reader.read_int32()
             if len(model.attach_points) == n_normals:
                 for i in range(n_normals):
                     model.attach_points[i].has_uvec = True
                     reader.read_int32()  # index
-                    # Layout is index, normal, uvec -- the normal repeats what
-                    # ATCH already gave us and is discarded (polymodel.cpp,
-                    # ID_ATTACH_NORMALS). Reading these two the other way round
-                    # silently rotates anything attached to the model.
+                    # Layout is index, normal, uvec (polymodel.cpp,
+                    # ID_ATTACH_NORMALS); the normal repeats ATCH's and is
+                    # discarded. Swapping the two silently rotates anything
+                    # attached to the model.
                     reader.read_vector3()  # normal (already read from ATCH)
                     model.attach_points[i].uvec = reader.read_vector3()
             else:
@@ -1328,17 +1211,11 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
 
         else:
             # Unknown chunk: nothing to read, only somewhere to skip to. If that
-            # somewhere is past the end of the file there is no next chunk, so
-            # this is where the chunk list stops.
-            #
-            # A file arrives like this honestly -- padded, or carrying a few
-            # bytes of junk on the end that read as a header, or cut short by a
-            # failed copy -- and every chunk before it parsed. Refusing the whole
-            # model over a tail nothing depends on turned a file that imported
-            # completely into one that did not import at all. The over-run is
-            # only tolerable *here*, though: a chunk this parser understands has
-            # a body it actually needs, and reading half of one raises EOFError a
-            # few lines above rather than inventing the rest.
+            # is past EOF there is no next chunk, so the chunk list stops here
+            # rather than refusing a model whose every other chunk parsed --
+            # padding or junk bytes reading as a header is a real case. Only
+            # tolerable here: a chunk the parser understands needs its body, and
+            # half of one raises EOFError above instead.
             if chunk_len > reader.bytes_remaining():
                 log.warning(
                     "Unreadable chunk at offset %d declares %d byte(s) of body "
@@ -1348,14 +1225,10 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
                 )
                 break
 
-        # Ensure we're at the end of this chunk. Forward progress is checked
-        # rather than assumed, because it is the only thing that ends this loop:
-        # a chunk_end at or before the header this iteration started from sends
-        # the parser back to re-read that same header, forever, on Blender's
-        # main thread. read_chunk_header already refuses every length that could
-        # do that, so this is unreachable today and is here to stay unreachable
-        # -- it is what stops a future edit to that check from turning a corrupt
-        # file back into an unkillable Blender.
+        # Forward progress is the only thing that ends this loop: a chunk_end at
+        # or before this iteration's header re-reads that header forever on
+        # Blender's main thread. read_chunk_header already refuses every length
+        # that could do that, so this is a backstop against a future edit to it.
         if chunk_end <= pos:
             raise ValueError(
                 f"Chunk at offset {pos} ends at {chunk_end}, which is not "
@@ -1363,8 +1236,8 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
             )
         reader.seek(chunk_end)
 
-    # Drop the placeholders left where a SOBJ index was never filled in. This
-    # has to happen before build_hierarchy, which cannot walk a list of Nones.
+    # Drop placeholders left where a SOBJ index was never filled in; must
+    # happen before build_hierarchy, which cannot walk a list of Nones.
     missing = [i for i, sm in enumerate(model.submodels) if sm is None]
     if missing:
         log.warning(
@@ -1380,10 +1253,9 @@ def parse_pof_stream(stream: BinaryIO) -> POFModel:
 def _padded_keyframes(keyframes: list[Keyframe], count: int) -> list[Keyframe]:
     """Return exactly ``count`` keyframes, padding a short track if needed.
 
-    Pre-v22 files store one global key count that applies to every submodel
-    (``ID_ANIM`` in polymodel.cpp), so a submodel with a shorter track has to be
-    padded out or the reader runs off the end of the chunk. Repeating the last
-    key holds the final pose; an empty track pads with a neutral key.
+    Pre-v22 files store one global key count for every submodel (``ID_ANIM`` in
+    polymodel.cpp), so a shorter track must be padded or the reader runs off the
+    end of the chunk. Repeating the last key holds the final pose.
 
     Args:
         keyframes: Track to pad. A longer track is truncated to ``count``.
@@ -1424,18 +1296,15 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         model: Model to serialize. Its ``version`` and ``major_version`` select
             which version-gated fields are written; they must agree with each
             other or the result will not parse back.
-        stream: Writable binary stream.
     """
     writer = POFWriter(stream)
 
-    # Header
     writer.write_bytes(POF_MAGIC)
     writer.write_int32(model.version)
 
     features = model.features
     timed = features.timed_anim
 
-    # OHDR chunk
     ohdr_buf = io.BytesIO()
     ohdr_w = POFWriter(ohdr_buf)
     ohdr_w.write_int32(len(model.submodels))
@@ -1447,7 +1316,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
     writer.write_chunk_header(CHUNK_OHDR, ohdr_buf.tell())
     writer.write_bytes(ohdr_buf.getvalue())
 
-    # TXTR chunk
     txtr_buf = io.BytesIO()
     txtr_w = POFWriter(txtr_buf)
     txtr_w.write_int32(len(model.textures))
@@ -1456,7 +1324,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
     writer.write_chunk_header(CHUNK_TXTR, txtr_buf.tell())
     writer.write_bytes(txtr_buf.getvalue())
 
-    # SOBJ chunks
     for sm in model.submodels:
         sobj_buf = io.BytesIO()
         sobj_w = POFWriter(sobj_buf)
@@ -1477,19 +1344,16 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         sobj_w.write_int32(sm.movement_axis)
         sobj_w.write_int32(0)  # no freespace chunks
 
-        # Vertices
         sobj_w.write_int32(len(sm.vertices))
         for v in sm.vertices:
             sobj_w.write_vector3(v.position)
         for v in sm.vertices:
             sobj_w.write_vector3(v.normal)
 
-        # Alpha per vertex (version >= 23)
         if features.vertex_alpha:
             for v in sm.vertices:
                 sobj_w.write_float(v.alpha)
 
-        # Faces
         sobj_w.write_int32(len(sm.faces))
         for face in sm.faces:
             sobj_w.write_vector3(face.normal)
@@ -1504,7 +1368,8 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
                 sobj_w.write_int32(fv.index)
                 sobj_w.write_float(fv.u)
                 sobj_w.write_float(fv.v)
-            # Lightmap UV diffs (version >= 21)
+            # Lightmap UV diffs are never authored here and the reader
+            # discards them, so there is nothing to round-trip -- emit zeros.
             if features.lightmap_uv:
                 sobj_w.write_float(0.0)
                 sobj_w.write_float(0.0)
@@ -1512,7 +1377,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_SOBJ, sobj_buf.tell())
         writer.write_bytes(sobj_buf.getvalue())
 
-    # GPNT chunk
     if model.gun_banks:
         gpnt_buf = io.BytesIO()
         gpnt_w = POFWriter(gpnt_buf)
@@ -1525,7 +1389,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_GPNT, gpnt_buf.tell())
         writer.write_bytes(gpnt_buf.getvalue())
 
-    # WBAT chunk
     if model.weapon_batteries:
         wbat_buf = io.BytesIO()
         wbat_w = POFWriter(wbat_buf)
@@ -1540,7 +1403,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_WBS, wbat_buf.tell())
         writer.write_bytes(wbat_buf.getvalue())
 
-    # ANIM chunk (rotation animation)
     has_anim = any(sm.num_key_angles > 0 for sm in model.submodels)
     if has_anim:
         anim_buf = io.BytesIO()
@@ -1565,7 +1427,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_ANIM, anim_buf.tell())
         writer.write_bytes(anim_buf.getvalue())
 
-    # PANI chunk (positional animation)
     has_pos_anim = any(sm.num_key_pos > 0 for sm in model.submodels)
     if has_pos_anim:
         pani_buf = io.BytesIO()
@@ -1588,7 +1449,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_PANI, pani_buf.tell())
         writer.write_bytes(pani_buf.getvalue())
 
-    # GRND chunk
     if model.ground_planes:
         grnd_buf = io.BytesIO()
         grnd_w = POFWriter(grnd_buf)
@@ -1600,7 +1460,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_GRND, grnd_buf.tell())
         writer.write_bytes(grnd_buf.getvalue())
 
-    # ATCH chunk
     if model.attach_points:
         atch_buf = io.BytesIO()
         atch_w = POFWriter(atch_buf)
@@ -1612,7 +1471,6 @@ def write_pof_stream(model: POFModel, stream: BinaryIO) -> None:
         writer.write_chunk_header(CHUNK_ATCH, atch_buf.tell())
         writer.write_bytes(atch_buf.getvalue())
 
-        # NATH chunk (attach normals)
         if any(ap.has_uvec for ap in model.attach_points):
             nath_buf = io.BytesIO()
             nath_w = POFWriter(nath_buf)

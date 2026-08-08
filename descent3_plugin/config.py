@@ -1,20 +1,17 @@
 """Per-project configuration, read from a ``descent3.toml`` beside the models.
 
-The settings here are *conventions*, not preferences: the importer and the
-exporter must agree on them or a model stops surviving a round trip. If import
-names a gun empty ``Gun_0`` and export looks for ``gun.0``, the point is
-silently dropped. Both halves therefore read the same file, and the defaults
-below are exactly the values the add-on used before the file existed -- a
-project with no ``descent3.toml`` behaves as it always did.
+The settings here are *conventions*, not preferences: importer and exporter must
+agree on them or a model stops surviving a round trip -- import naming a gun
+empty ``Gun_0`` while export looks for ``gun.0`` drops the point silently. Both
+halves read the same file, and the defaults below are the values the add-on used
+before the file existed, so a project with no ``descent3.toml`` behaves as
+always.
 
-This is deliberately not the home for *user* preferences (where my texture
-library lives, how big the viewport markers are). Those belong in the add-on
-preferences, which get a UI and follow the user between projects, rather than
-in a file checked in next to somebody's assets.
-
-Format constants -- version gates, chunk IDs, flag bits -- are not here and
-must not be: they are facts about a binary format, not settings, and a project
-that "configured" them would simply produce corrupt models.
+Not the home for *user* preferences (texture library location, viewport marker
+size); those belong in the add-on preferences. Format constants -- version
+gates, chunk IDs, flag bits -- must not be here either: they are facts about a
+binary format, and a project that "configured" them would produce corrupt
+models.
 
 Free of any ``bpy`` dependency so it can be unit-tested without Blender.
 """
@@ -37,24 +34,22 @@ from .texutil import IMAGE_EXTENSIONS
 
 log = logging.getLogger(__package__)
 
-# A capability probe, not a swallowed error: tomllib is stdlib from Python
-# 3.11, which covers every Blender this add-on supports, so this is belt and
-# braces. Nothing is logged here because the package is still being imported
-# and register() has not configured logging yet -- load_config() checks for the
-# None and returns a warning the operator shows the user.
+# Belt and braces: tomllib is stdlib from Python 3.11, which covers every
+# Blender this add-on supports. Nothing is logged here because register() has
+# not configured logging yet -- load_config() turns the None into a warning.
 try:
     import tomllib
 except ImportError:  # pragma: no cover - not reachable on Blender 4.2+
     tomllib = None
 
-#: File the add-on looks for, walking up from the model being imported or
-#: exported. Named after the game rather than the add-on so a project can be
-#: shared between tools.
+#: Searched for by walking up from the model being imported or exported. Named
+#: after the game rather than the add-on so a project can be shared between
+#: tools.
 CONFIG_FILENAME = "descent3.toml"
 
-#: How many parent directories to search before giving up. Deep enough to find
-#: a config at a project root from ``<project>/models/ship/`` without walking
-#: to the filesystem root and picking up an unrelated file.
+#: How many parent directories to search above the starting one. Deep enough to
+#: find a config at a project root from ``<project>/models/ship/`` without
+#: walking to the filesystem root and picking up an unrelated file.
 CONFIG_SEARCH_DEPTH = 6
 
 
@@ -88,11 +83,11 @@ class TextureConfig:
             folder. Relative entries resolve against the config file, so a
             checked-in project keeps working on someone else's machine.
         export_dir: Subfolder beside the exported model that written texture
-            images go into, relative to the ``.pof``. Export-only: import does
+            images go into, relative to the ``.pof``. The default says
+            "exported" so generated images are not mistaken, by user or tool,
+            for hand-authored source art. Export-only: import does
             not search it, so exports stay sandboxed from the models they came
-            from unless the folder is listed in ``search_dirs`` deliberately.
-            The name carries "exported" on purpose -- these are generated files,
-            and nothing should mistake them for hand-authored source art.
+            from unless the folder is deliberately listed in ``search_dirs``.
     """
 
     extensions: tuple[str, ...] = tuple(IMAGE_EXTENSIONS)
@@ -105,12 +100,12 @@ class ExportConfig:
     """Project-level export targets.
 
     Attributes:
-        version: POF version new files target. A project usually pins this,
-            because it is a property of the game build being modded.
+        version: POF version new files target. Usually pinned per project, being
+            a property of the game build being modded.
         texture_format: Format written for texture images, or
             :data:`~descent3_plugin.naming.TEXTURE_FORMAT_NONE` to write none.
-            Defaults to writing none: exporting a model should not drop image
-            files beside it unless that was asked for.
+            Defaults to none: exporting should not drop image files beside a
+            model unless that was asked for.
     """
 
     version: int = OBJFILE_VERSION
@@ -122,9 +117,6 @@ class Config:
     """A resolved configuration.
 
     Attributes:
-        naming: Object-naming conventions.
-        textures: Texture-resolution settings.
-        export: Export targets.
         source_path: File this was loaded from, or ``None`` if nothing was
             found and the defaults are in use.
     """
@@ -135,13 +127,12 @@ class Config:
     source_path: str | None = None
 
 
-#: The configuration used when no ``descent3.toml`` is found. Equal to the
-#: add-on's behaviour before configuration existed.
+#: Used when no ``descent3.toml`` is found. Equal to the add-on's behaviour
+#: before configuration existed.
 DEFAULT_CONFIG = Config()
 
-# Section -> the keys it accepts. Used to reject typos: a misspelled key in a
-# hand-edited file would otherwise be silently ignored, and the user would be
-# left wondering why their setting had no effect.
+# Section -> the keys it accepts. Used to reject typos, which would otherwise be
+# silently ignored and leave the user wondering why a setting had no effect.
 _SCHEMA: dict[str, set[str]] = {
     "naming": {
         "gun_prefix", "attach_prefix", "submodel_fallback_prefix", "uv_layer",
@@ -156,7 +147,8 @@ def find_config_file(start_dir: str, depth: int = CONFIG_SEARCH_DEPTH) -> str | 
 
     Args:
         start_dir: Directory to start from, normally the model's own folder.
-        depth: How many parent directories to try before giving up.
+        depth: How many *parent* directories to search above ``start_dir``,
+            which is itself always searched.
 
     Returns:
         Path of the nearest config file, or ``None``. Nearest wins, so a
@@ -202,11 +194,11 @@ def _parse_naming(table: dict, warnings: list[str]) -> NamingConfig:
 def _rejected_export_dir(value: str) -> str | None:
     """Return why ``value`` is unusable as an export subfolder, or None.
 
-    This has to be stricter than :func:`os.path.isabs`. Python 3.13 changed
+    Stricter than :func:`os.path.isabs` on purpose: Python 3.13 changed
     ``ntpath.isabs`` so a single leading slash is no longer absolute on Windows,
-    which means ``"/textures"`` passes that check and then resolves to the root
-    of the current drive. The setting exists to name a folder *beside the
-    exported model*, so anything that could land somewhere else is refused.
+    letting ``"/textures"`` pass and then resolve to the current drive's root.
+    The setting names a folder *beside the exported model*, so anything that
+    could land elsewhere is refused.
 
     Args:
         value: The configured directory, already stripped.
@@ -291,12 +283,11 @@ def _parse_export(table: dict, warnings: list[str]) -> ExportConfig:
 def parse_config(data: dict, source_path: str | None = None) -> tuple[Config, list[str]]:
     """Build a :class:`Config` from an already-decoded TOML mapping.
 
-    Unknown sections and keys produce warnings rather than errors, and every
-    invalid value falls back to its default. A config file is something a user
-    hand-edits, so one bad line should cost that line, not the whole import.
+    Unknown sections and keys warn rather than raise, and every invalid value
+    falls back to its default: a config file is hand-edited, so one bad line
+    should cost that line, not the whole import.
 
     Args:
-        data: Decoded TOML document.
         source_path: Path the document came from, recorded on the result.
 
     Returns:
@@ -331,9 +322,6 @@ def parse_config(data: dict, source_path: str | None = None) -> tuple[Config, li
 
 def load_config(path: str) -> tuple[Config, list[str]]:
     """Load and validate a config file.
-
-    Args:
-        path: Path of the TOML file.
 
     Returns:
         A ``(config, warnings)`` pair. A file that cannot be read or decoded
@@ -380,16 +368,11 @@ def resolved_search_dirs(config: Config) -> list[str]:
     """Return ``config.textures.search_dirs`` as absolute paths.
 
     Relative entries resolve against the config file's own directory, not the
-    current working directory, so a project checked into version control keeps
-    working wherever it is cloned.
-
-    Every result is normalized. A TOML file naturally uses forward slashes even
-    on Windows, and the caller dedupes search directories by string equality
-    against paths from :func:`os.path.abspath`; without this, ``C:/tex`` and
-    ``C:\\tex`` would read as two different directories and get searched twice.
-
-    Args:
-        config: Configuration to resolve.
+    current working directory, so a project in version control keeps working
+    wherever it is cloned. Results are normalized because a TOML file uses
+    forward slashes even on Windows while the caller dedupes by string equality
+    against :func:`os.path.abspath` output, so ``C:/tex`` and ``C:\\tex`` would
+    otherwise be searched twice.
 
     Returns:
         Absolute, normalized directory paths, in the order given. Relative

@@ -1,12 +1,9 @@
 """Guards the add-on package's bpy-free import contract.
 
 ``descent3_plugin/__init__.py`` defers every ``bpy``-touching import into
-``register()`` so the package can be imported in a plain interpreter. That is
-what lets the rest of this suite say ``from descent3_plugin.poformat import
-...`` instead of manipulating ``sys.path``. If someone adds a module-scope
-``import bpy`` back to ``__init__.py``, or to any of ``config``,
-``constants``, ``mathutil``, ``naming``, ``poformat`` or ``texutil``, collection of every other test file
-breaks -- so these tests fail loudly and point at the cause.
+``register()`` so the package can be imported in a plain interpreter. A
+module-scope ``import bpy`` there, or in one of the modules listed below,
+breaks collection of every other test file.
 
 Each check runs in a subprocess: by the time this module executes, the other
 test files have already imported the package, so an in-process check would
@@ -24,16 +21,13 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-#: The extension manifest, which is where the add-on's version is really
-#: written down. Read here rather than restating the version as a literal:
-#: tests/test_manifest.py owns the manifest-versus-``bl_info`` drift check, and
-#: a second copy of the number in this file would be one more thing to forget
-#: on a release -- and would fail with "expected (1, 0, 0)" pointing at nothing.
+#: The extension manifest, where the add-on's version is really written down.
+#: Read here rather than restated as a literal: a second copy of the number in
+#: this file would be one more thing to forget on a release.
 MANIFEST_PATH = os.path.join(
     REPO_ROOT, "descent3_plugin", "blender_manifest.toml"
 )
 
-#: Modules that must import without Blender present.
 BPY_FREE_MODULES = [
     "descent3_plugin",
     "descent3_plugin.config",
@@ -83,8 +77,8 @@ def _manifest_version() -> tuple[int, ...]:
     """Return the canonical version, from the manifest.
 
     Returns:
-        ``blender_manifest.toml``'s ``version`` split into ints, i.e. the
-        ``bl_info`` tuple every other statement of the version has to match.
+        ``blender_manifest.toml``'s ``version`` split into ints -- the tuple
+        every other statement of the version has to match.
     """
     with open(MANIFEST_PATH, "rb") as f:
         version = tomllib.load(f)["version"]
@@ -94,16 +88,9 @@ def _manifest_version() -> tuple[int, ...]:
 def test_bl_info_is_readable_without_bpy():
     """``bl_info`` must survive a cold import in a plain interpreter.
 
-    Reading it is how tests/test_manifest.py checks the version has not drifted
-    from the manifest, and that check runs without Blender -- so an ``import
-    bpy`` reaching module scope in ``__init__.py`` would not just break this
-    test, it would take the drift check down with it and let a release ship
-    with a stale ``bl_info``.
-
-    The expected value comes from the manifest because the manifest is
-    canonical. Asserting a literal here would make this file a second place the
-    version is written down, which is the exact drift the manifest exists to
-    stop.
+    tests/test_manifest.py's drift check reads it without Blender, so an
+    ``import bpy`` reaching module scope in ``__init__.py`` would take that
+    check down too and let a release ship with a stale ``bl_info``.
     """
     result = subprocess.run(
         [
@@ -120,19 +107,13 @@ def test_bl_info_is_readable_without_bpy():
 
 
 class TestReloadOrderIsDerivedFromThePackage:
-    """The reload list used to be written out by hand, and rotted unnoticed.
+    """The reload list is derived from the package, not written out by hand.
 
-    ``texexport`` was never added to it, so an edited ``texexport.py`` went on
-    running its previous code after the add-on was toggled off and on -- which is
-    the one workflow the reload exists to support. Nothing failed; the module was
-    simply stale, and the symptom was code behaving the way it did two saves ago.
-
-    It is read off the folder now (``_scan_package``) and topologically sorted
-    (``_reload_order``). Both are ``bpy``-free by construction -- they parse the
-    modules with :mod:`ast` rather than importing them -- so the invariants are
-    checkable here rather than only inside Blender. What is asserted is the two
-    things a hand-written list got wrong: that every module is in it, and that
-    nothing is reloaded before something it imports.
+    A hand-written list silently omitted ``texexport``, so an edited
+    ``texexport.py`` kept running its previous code across a disable/enable
+    cycle. ``_scan_package`` reads the folder, parsing with :mod:`ast` rather
+    than importing, and ``_reload_order`` topologically sorts what it returns;
+    both are bpy-free by construction, so they are checkable outside Blender.
     """
 
     def test_every_module_is_in_the_reload_order(self):
@@ -175,10 +156,11 @@ class TestReloadOrderIsDerivedFromThePackage:
     def test_every_module_defining_classes_is_registered(self):
         """A module with bpy types that nothing registers loses its operators.
 
-        ``_scan_package`` reports which modules define a module-level ``classes``
-        tuple. ``_SUBMODULE_NAMES`` stays an explicit list -- a module missing
-        from it is silently unregistered, which is worse than a wrong reload --
-        so this is what stops the two drifting.
+        ``_SUBMODULE_NAMES`` stays an explicit list where the reload order is
+        derived, because a module missing from it is silently unregistered and
+        Blender reports nothing -- a worse failure than a wrong reload order. So
+        this compares it against the modules ``_scan_package`` found defining a
+        module-level ``classes`` tuple.
         """
         import descent3_plugin
 

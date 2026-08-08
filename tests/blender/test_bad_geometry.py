@@ -1,47 +1,37 @@
 """
 Blender-side damaged-geometry check.
 
-Two shapes of damaged face that take Blender down with it, both reproduced on
-5.2.0 LTS and both handled in ``import_pof``. Neither arrives as a Python
-exception -- they are access violations that kill the process -- so nothing in
-pytest can reach them and no ``try``/``except`` in the importer can catch them.
-A test that runs the importer for real is the only thing that says the guards
-still work.
+Two shapes of damaged face, both reproduced on 5.2.0 LTS and both handled in
+``import_pof``. Neither arrives as a Python exception -- they are access
+violations that kill the process -- so nothing in pytest can reach them and no
+``try``/``except`` in the importer can catch them.
 
 1. **A face naming a vertex the submodel does not have.** ``Mesh.from_pydata``
-   does not check the indices it is given. Measured on this build, a face
-   asking for vertex 40 of 4 is built and survives ``Mesh.update``, and a face
-   asking for ``-3`` keeps the ``-3`` in ``polygon.vertices``: the mesh now
-   holds an index that is not a vertex, and nothing has objected.
+   does not check indices: on this build a face asking for vertex 40 of 4
+   survives ``Mesh.update``, and ``-3`` stays ``-3`` in ``polygon.vertices``.
 
 2. **A face using the same vertex twice.** Every index is in range, so nothing
    about it is checkable from the file at all.
 
-Both end the same way. ``normals_split_custom_set_from_vertices`` reads whatever
-the mesh holds, and on either of these it dies with an
-EXCEPTION_ACCESS_VIOLATION. ``mesh.validate()`` removes both kinds of face and
-makes that call safe, which is why it runs before any loop data is written --
-the ordering, not the filtering, is what prevents the crash.
+Both kill ``normals_split_custom_set_from_vertices`` with an
+EXCEPTION_ACCESS_VIOLATION. ``mesh.validate()`` removes both kinds of face, so
+it must run before any loop data is written -- the ordering, not the filtering,
+is what prevents the crash. ``_usable_faces`` still filters case 1 out first,
+because ``validate`` reports it as "a face using one vertex twice, or a second
+copy of another face", which is not what happened.
 
-``_usable_faces`` filters case 1 out beforehand anyway, and the check that pins
-down why is "the user was told faces were dropped": let ``validate`` be the one
-to reject an out-of-range face and it reports "a face using one vertex twice, or
-a second copy of another face", which is not what happened.
-
-Both fixes drop geometry, and dropping geometry is the part a test has to watch:
-the polygons that survive are no longer 1:1 with the faces read from the file,
-so the UVs and material indices have to be re-paired against what Blender
-actually kept. Getting that wrong does not lose a face -- it slides every UV in
-the submodel onto its neighbour, which nobody notices until the model is in the
-game. So the checks below assert the survivors keep *their own* UVs and
-materials, not merely that the right number of faces came through.
+Both fixes drop geometry, so the surviving polygons are no longer 1:1 with the
+faces read from the file and the UVs and material indices have to be re-paired
+against what Blender kept; getting that wrong slides every UV onto its
+neighbour rather than losing a face. The checks below therefore assert the
+survivors keep *their own* UVs and materials.
 
     blender --background --factory-startup --python-exit-code 1 \
         --python tests/blender/test_bad_geometry.py
 
 Exits non-zero on failure so it can be wired into CI. A regression in either
 guard shows up as Blender dying part-way through the output rather than as a
-FAIL line -- the process is gone before it can print one.
+FAIL line.
 """
 
 import os
@@ -61,14 +51,13 @@ from descent3_plugin.import_pof import load_pof  # noqa: E402
 FIXTURE_DIR = os.path.join(REPO, "tests", "fixtures", "textured_model")
 
 #: How far past the end of the vertex list to point a corrupted corner. Any
-#: value past the end crashes an unguarded ``from_pydata``; this one is well
-#: clear of it so a stray reallocation cannot make the read land somewhere
-#: harmless and hide a regression.
+#: overrun crashes an unguarded ``from_pydata``; this one is well clear of the
+#: end so a stray reallocation cannot land somewhere harmless and hide a bug.
 OVERRUN_DISTANCE = 16
 
-#: A negative index is the other half of the same bug and reaches Blender by a
-#: different route: Python would read it as "from the end" and never complain,
-#: so a range check written as ``index < len(verts)`` alone lets it through.
+#: The other half of the same bug, reaching Blender by a different route: Python
+#: reads a negative index as "from the end", so a range check written as
+#: ``index < len(verts)`` alone lets it through.
 NEGATIVE_INDEX = -3
 
 failures = []
@@ -86,8 +75,7 @@ class FakeImportOp:
 
     def __init__(self):
         # Damaged geometry has to reach the user through the operator, not only
-        # the system console: a model quietly missing faces is the failure this
-        # whole file is about.
+        # the system console: a model quietly missing faces is the failure here.
         self.reports = []
 
     def report(self, level, msg):
@@ -126,9 +114,9 @@ def write_damaged(damage, name):
         name: Filename stem for the damaged copy.
 
     Returns:
-        A ``(path, parsed)`` pair. The model is re-parsed from the bytes rather
-        than reused from memory, so what the checks compare against is exactly
-        what the importer will be handed.
+        A ``(path, parsed)`` pair, re-parsed from the written bytes rather than
+        reused from memory, so the checks compare against what the importer is
+        handed.
     """
     model = poformat.parse_pof(open(MODEL, "rb").read())
     damage(model.submodels[0])
@@ -148,9 +136,9 @@ print(f"fixture: {len(pristine.submodels[0].vertices)} vertices, "
       f"{len(pristine.submodels[0].faces)} faces")
 
 # --- 1. faces pointing at vertices that do not exist ---------------------
-# Face 0 is corrupted first on purpose. An implementation that keeps UVs by
-# position rather than by re-pairing survivors would shift every later face by
-# one, and only a break at the *front* of the list exposes that.
+# Face 0 is corrupted first on purpose: keeping UVs by position rather than
+# re-pairing survivors shifts every later face by one, which only a break at the
+# *front* of the list exposes.
 
 
 def overrun(sm):
@@ -201,10 +189,9 @@ check("the user was told faces were dropped, through the operator",
       str([msg for _, msg in op.reports]))
 
 # --- 2. a face Blender itself rejects ------------------------------------
-# Every index is in range here, so the check above passes it through. What
-# removes it is mesh.validate(), and the reason validate has to run *before*
-# the custom normals are written is that this face is what kills the process
-# inside normals_split_custom_set_from_vertices.
+# Every index is in range, so the check above passes it through: mesh.validate()
+# is what removes it, and must run *before* the custom normals because this face
+# is what kills the process inside normals_split_custom_set_from_vertices.
 
 
 def repeated_vertex(sm):
@@ -229,8 +216,8 @@ check("import survives a face using one vertex twice",
 mesh = next(o for o in bpy.data.objects if o.type == "MESH").data
 remaining = degenerate_sm.faces[1:]
 if len(mesh.polygons) == len(degenerate_sm.faces):
-    # Blender's own rule about what counts as a polygon decides this, and it is
-    # allowed to change. What must not change is that the import completes.
+    # Blender's own rule about what counts as a polygon decides this and may
+    # change. What must not change is that the import completes.
     print("NOTE: this Blender kept the degenerate face; validate() left it")
 else:
     check("Blender removed the degenerate face and only that one",
@@ -244,9 +231,9 @@ else:
           str([msg for _, msg in op.reports]))
 
 # --- 3. a submodel with nothing usable left ------------------------------
-# Every face damaged at once. The submodel has to come through as an object with
-# no polygons rather than as a failed import: it may still be somebody's parent
-# in the hierarchy, and losing it would move every child.
+# Every face damaged at once. The submodel must come through as an object with
+# no polygons rather than a failed import: it may still be somebody's parent in
+# the hierarchy, and losing it would move every child.
 
 
 def wreck_everything(sm):

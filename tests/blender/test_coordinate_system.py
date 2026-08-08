@@ -2,20 +2,15 @@
 Blender-side coordinate-system check.
 
 Descent 3 is right-handed **Y-up**; Blender is right-handed **Z-up**. Import
-rotates 90 degrees about X, export rotates back. Both spaces being right-handed
-means this is a rotation and not a mirror, so winding order is untouched and
-normals transform exactly like positions.
+rotates 90 degrees about X, export rotates back -- a rotation, not a mirror, so
+winding order is untouched and normals transform exactly like positions.
 
-pytest covers the maths in tests/test_mathutil.py. What it cannot reach is
-whether the conversion is actually *applied* at every point where data crosses
-into or out of Blender -- a missed call site is invisible to a unit test and
-shows up as a model lying on its side.
-
-The object transforms Blender keeps *outside* the mesh are checked here for the
-same reason. Rotation, scale and parenting live on the object, not in
-``obj.data``, and a `mathutils` matrix is not something a bpy-free unit test can
-exercise -- so an exporter reading raw local coordinates loses all three
-silently and only the game shows it.
+pytest covers the maths in tests/test_mathutil.py; what it cannot reach is
+whether the conversion is *applied* at every call site where data crosses into
+or out of Blender. Nor can it reach the transforms Blender keeps *outside* the
+mesh -- rotation, scale and parenting live on the object, not in ``obj.data``,
+so an exporter reading raw local coordinates loses all three silently and only
+the game shows it.
 
     blender --background --factory-startup --python-exit-code 1 \
         --python tests/blender/test_coordinate_system.py
@@ -114,13 +109,11 @@ check("every vertex is rotated Y-up -> Z-up on import",
       not mismatched,
       "" if not mismatched else f"{len(mismatched)} wrong, first: {mismatched[0]}")
 
-# Spell the first vertex out, so a failure shows the actual numbers.
 v0 = src_sm.vertices[0].position
 print(f"      vertex 0: descent {v0.as_tuple()} -> blender {tuple(mesh.vertices[0].co)}")
 
 # --- 2. the conversion must not be a mirror -----------------------------
-# Volume is preserved by a rotation; a mirror negates it. Compare the mesh's
-# bounding-box volume against the source's.
+# Volume is preserved by a rotation; a mirror negates it.
 def bbox_volume(points):
     xs = [p[0] for p in points]; ys = [p[1] for p in points]; zs = [p[2] for p in points]
     return ((max(xs) - min(xs)) * (max(ys) - min(ys)) * (max(zs) - min(zs)))
@@ -151,8 +144,8 @@ check("import then export returns the original coordinates",
       "" if not drifted else f"{len(drifted)} drifted, first: {drifted[0]}")
 
 # --- 4. gun and attach points make the trip too -------------------------
-# These cross the boundary through a different code path than vertices do, so
-# a conversion missing here would not show up in the geometry checks above.
+# Markers cross the boundary through a different code path than vertices, so a
+# conversion missing here is invisible to the geometry checks above.
 if source.gun_banks:
     gun_drift = [
         (i, a.point.as_tuple(), b.point.as_tuple())
@@ -161,7 +154,7 @@ if source.gun_banks:
     ]
     check("gun points round-trip", not gun_drift, str(gun_drift[:1]))
 else:
-    # The fixture has none, so make one in Blender and check it lands correctly.
+    # textured_cube.oof carries no gun banks, so this is the branch that runs.
     wipe()
     load_pof(bpy.context, MODEL, FakeImportOp())
     parent = next(o for o in bpy.data.objects if o.type == "MESH")
@@ -181,7 +174,6 @@ else:
         check("gun point is converted Z-up -> Y-up on export",
               close(expected, actual), f"expected {expected}, got {actual}")
 
-        # And back again: re-importing must put the marker where it started.
         wipe()
         load_pof(bpy.context, out2, FakeImportOp())
         back = next((o for o in bpy.data.objects
@@ -191,20 +183,18 @@ else:
               str(tuple(back.location)) if back else "no marker imported")
 
 # --- 5. a marker parented the way Blender's Ctrl+P does -----------------
-# Section 4 parents with a bare ``marker.parent = parent``, which leaves
-# matrix_parent_inverse at identity -- the one arrangement in which
-# ``obj.location`` happens to be the world position as well, and therefore the
-# one arrangement that cannot see this bug. OBJECT_OT_parent_set stores the
-# parent's inverted world matrix there so the child does not jump when it is
-# parented, and from then on ``obj.location`` is measured in a space that is
-# neither the parent's nor the world's. Exporting it verbatim is what put a gun
-# several units from where the user dropped it.
+# Section 4's bare ``marker.parent = parent`` leaves matrix_parent_inverse at
+# identity -- the one arrangement in which ``obj.location`` is also the world
+# position, so it cannot see this bug. OBJECT_OT_parent_set (Ctrl+P) stores the
+# parent's inverted world matrix there instead, so the child does not jump when
+# it is parented, leaving ``obj.location`` in a space that is neither the
+# parent's nor the world's; exporting it verbatim put a gun several units from
+# where the user dropped it.
 #
-# The parent is rotated as well as moved, because what the file wants is a plain
+# The parent is rotated as well as moved because the file wants a plain
 # world-space delta: MinMaxSubmodel in reference/polymodel.cpp accumulates
-# sm->offset down the hierarchy with vector adds and never rotates a child by
-# its parent. Resolving the marker into the parent's local space would be wrong,
-# even though it is the more obvious reading of "offset from the parent".
+# sm->offset with vector adds and never rotates a child by its parent, so
+# resolving into the parent's local space would be wrong.
 PARENT_LOCATION = (10.0, -5.0, 2.0)
 PARENT_ROTATION_Z = math.radians(35.0)
 MARKER_LOCATION = (1.0, 2.0, 3.0)
@@ -214,8 +204,8 @@ load_pof(bpy.context, MODEL, FakeImportOp())
 parent = next(o for o in bpy.data.objects if o.type == "MESH")
 parent.location = PARENT_LOCATION
 parent.rotation_euler = (0.0, 0.0, PARENT_ROTATION_Z)
-# matrix_world is stale until the depsgraph runs, and Ctrl+P reads
-# matrix_parent_inverse straight off it -- so does the exporter.
+# matrix_world is stale until the depsgraph runs, and both Ctrl+P and the
+# exporter read straight off it.
 bpy.context.view_layer.update()
 
 marker = bpy.data.objects.new("Gun_0", None)
@@ -243,7 +233,6 @@ if parented.gun_banks:
     check("gun point exports as a world-space delta from its parent's origin",
           close(expected, actual), f"expected {expected}, got {actual}")
 
-    # The point of the whole exercise: it comes back where the user left it.
     wipe()
     load_pof(bpy.context, out3, FakeImportOp())
     bpy.context.view_layer.update()
@@ -256,12 +245,11 @@ if parented.gun_banks:
           else "no marker imported")
 
 # --- 6. an object's own rotation and scale must reach the file ----------
-# Submodel geometry used to be written straight out of obj.data, which is the
-# object's *local* space: rotating or scaling a submodel in Blender changed
-# nothing in the exported model, and the user found out in the game. Export
-# bakes the object's world matrix in and keeps the geometry centred on the
-# submodel's own origin, so the offset carries the placement and the vertices
-# carry the shape.
+# Submodel geometry used to be written straight out of obj.data -- the object's
+# *local* space -- so rotating or scaling a submodel in Blender changed nothing
+# in the exported model. Export bakes the world matrix in and keeps the geometry
+# centred on the submodel's own origin: the offset carries the placement, the
+# vertices the shape.
 #
 # The scale is non-uniform on purpose. Positions transform by the matrix and
 # normals by its inverse transpose; under a uniform scale the two agree, so a
@@ -290,9 +278,8 @@ expected_positions = [
 ]
 
 # res_sm is this same fixture exported untransformed, back in section 3. Were
-# the transform above ever weakened to an identity, every check below would
-# still pass against an exporter that ignores the object entirely -- so prove
-# first that the expected values are not simply the untransformed ones.
+# the transform above ever weakened to an identity, every check below would pass
+# against an exporter that ignores the object entirely.
 check("the test transform really does move the geometry",
       any(not close(e, v.position.as_tuple())
           for e, v in zip(expected_positions, res_sm.vertices)))
@@ -312,12 +299,10 @@ check("the object's world position becomes the submodel offset",
       f"expected {blender_to_descent(world.translation).as_tuple()}, "
       f"got {tf_sm.offset.as_tuple()}")
 
-# Normals take the inverse transpose, or a non-uniform scale tips them off the
-# surface. The expected values are derived from the untransformed export in
-# section 3 rather than from the mesh, so this stays honest whichever normals
-# export reads -- authored custom split normals or MeshVertex.normal. What is
-# being checked is that the world transform reached them at all, not which
-# layer they came out of.
+# Expected values are derived from the untransformed export in section 3 rather
+# than from the mesh, so this stays honest whichever normals export reads --
+# authored custom split normals or MeshVertex.normal. What is checked is that
+# the world transform reached them at all, not which layer they came from.
 normal_matrix = world.to_3x3().inverted().transposed()
 expected_normals = [
     blender_to_descent(
@@ -336,20 +321,20 @@ check("normals are transformed by the inverse transpose of the world matrix",
       "" if not bent else f"{len(bent)} wrong, first: {bent[0]}")
 
 # --- 6b. modifiers have to reach the file too ---------------------------
-# The world matrix and the evaluated mesh are two separate halves of "export
-# what the viewport shows", and section 6 only exercises the first: an exporter
-# reading ``obj.data`` through ``matrix_world`` passes every check above and
-# still writes half a ship for anything with a Mirror on it. A modifier is added
-# here rather than baked into a fixture, so the fixture stays the plain model
-# every other section compares against.
+# Section 6 exercises only the world matrix; the evaluated mesh is the other
+# half of "export what the viewport shows": an exporter reading ``obj.data``
+# through ``matrix_world`` passes every check above and still writes half a
+# ship for anything with a Mirror on it. The modifier is added here rather than
+# baked into a fixture, so the fixture stays the plain model every other
+# section compares against.
 wipe()
 load_pof(bpy.context, MODEL, FakeImportOp())
 modified = next(o for o in bpy.data.objects if o.type == "MESH")
 before_vertices = len(modified.data.vertices)
 mirror = modified.modifiers.new(name="Mirror", type="MIRROR")
 mirror.use_axis = (True, False, False)
-# Offset the mesh clear of the mirror plane, or the halves weld and the vertex
-# count does not move -- which would make this check pass vacuously.
+# Offset the mesh clear of the mirror plane, or the halves weld, the vertex
+# count does not move and the check passes vacuously.
 for v in modified.data.vertices:
     v.co.x += 5.0
 bpy.context.view_layer.update()
@@ -368,13 +353,11 @@ check("and the mirrored half is really on the other side",
       f"{max(v.position.x for v in mirrored.submodels[0].vertices)}")
 
 # --- 7. a marker's direction must survive the round trip ----------------
-# A gun bank's normal is where it fires. Import parsed it and dropped it, and
-# export wrote one hardcoded placeholder for every marker, so a model that made
-# the trip came back with every gun on the ship aimed the same way -- and
-# nothing said so, because the positions were all still right.
-#
-# The directions below are deliberately all different: an exporter that writes a
-# constant passes a one-marker test.
+# A gun bank's normal is where it fires. Import used to drop it and export wrote
+# one hardcoded placeholder per marker, so a round trip came back with every gun
+# aimed the same way while the positions all stayed right. The directions below
+# are deliberately all different: an exporter writing a constant passes a
+# one-marker test.
 GUN_DIRECTIONS = [
     (0.0, 0.0, 1.0),
     (1.0, 0.0, 0.0),
@@ -382,9 +365,9 @@ GUN_DIRECTIONS = [
     (0.6, 0.8, 0.0),
     (-0.3, 0.4, -0.866025),
 ]
-#: Attach points additionally carry an up vector, fixing their roll about the
-#: direction. NATH is all-or-nothing per model -- the parser only accepts a count
-#: equal to the attach-point count -- so a file either fixes every roll or none.
+#: Attach points additionally carry an up vector fixing their roll about the
+#: direction. NATH is all-or-nothing per model -- the parser only accepts a
+#: count equal to the attach-point count -- so a file fixes every roll or none.
 ATTACH_FRAMES = [
     ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
     ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
@@ -424,7 +407,7 @@ aimed = os.path.join(work, "aimed.pof")
 with open(aimed, "wb") as f:
     f.write(poformat.write_pof(marker_model()))
 # Read back through the parser, not from the model above: these are the values
-# the importer is actually handed.
+# the importer is handed.
 aimed_src = poformat.parse_pof(open(aimed, "rb").read())
 
 wipe()
@@ -469,8 +452,8 @@ check("an attach point keeps its facing and its roll",
       not unrolled,
       "" if not unrolled else f"{len(unrolled)} wrong, first: {unrolled[0]}")
 
-# And the direction really is read off the empty, rather than stashed on import
-# and copied back: turning the marker in Blender must turn the gun in the file.
+# The direction must be read off the empty, not stashed on import and copied
+# back -- so turning the marker in Blender has to turn the gun in the file.
 gun0 = next(o for o in bpy.data.objects
             if o.type == "EMPTY" and o.name == "Gun_0")
 gun0.rotation_euler = (math.radians(-90.0), 0.0, 0.0)
@@ -480,7 +463,7 @@ save_pof(bpy.context, out6, FakeExportOp())
 turned_back = poformat.parse_pof(open(out6, "rb").read())
 # The marker's forward axis is local +Z. Turned -90 degrees about X it points
 # along Blender +Y, which is Descent -Z -- the exact opposite of the (0, 0, 1)
-# this marker came out of the file with, so a stale value cannot pass.
+# it came out of the file with, so a stale value cannot pass.
 TURNED_DIRECTION = (0.0, 0.0, -1.0)
 check("the marker's own direction is the one it started with",
       close(aimed_src.gun_banks[0].normal.as_tuple(),
@@ -495,9 +478,8 @@ check("rotating the empty in Blender turns the gun in the file",
 # (reference/polymodel.cpp, MinMaxSubmodel: ``offset += sm->offset``, a plain
 # vector add). Import mirrors that by leaving matrix_parent_inverse at identity,
 # so a child's world position is its parent's plus its own location, and export
-# writes world-space deltas back. Get either half wrong and one level still
-# looks right -- it takes three to show it, which is why this is not folded into
-# the two-deep checks above.
+# writes world-space deltas back. Two levels still look right when either half
+# is wrong; it takes three to show it.
 CHILD_OFFSET = (10.0, 0.0, 0.0)
 GRAND_OFFSET = (0.0, 5.0, 0.0)
 
@@ -570,15 +552,11 @@ check("the model bounding box reaches the furthest submodel",
 
 # --- 9. a mirrored object must not export inside out --------------------
 # Duplicating a wing and scaling it -1 on X is how a left wing gets built, and
-# it is the one transform that reverses orientation. Baking matrix_world into
-# the vertices moves the surface but leaves each face's corners in the order
-# they had before the mirror, while the normal -- through the inverse transpose
-# -- turns round with the surface. The two then disagree, and the part renders
-# inside out in the game while looking perfect in Blender.
-#
-# Checked by recomputing each exported face's normal from its own stored
-# vertices and comparing it against the normal stored beside them: they have to
-# agree, on the mirrored object exactly as on its un-mirrored twin.
+# it is the one transform that reverses orientation: baking matrix_world into
+# the vertices leaves each face's corners in the order they had before the
+# mirror, while the normal -- through the inverse transpose -- turns round with
+# the surface. The two then disagree, and the part renders inside out in the
+# game while looking perfect in Blender.
 def winding_disagreements(sm):
     """Return how many of a submodel's faces are wound against their normal."""
     wrong = 0
@@ -619,11 +597,11 @@ check("a negatively scaled object's winding agrees with its normals",
       f"{winding_disagreements(by_sm['WingL'])} of {len(by_sm['WingL'].faces)}")
 
 # --- 10. a submodel with no geometry is a joint, not a mistake -----------
-# A turret's pivot has no vertices: it exists to carry ``$rotate=`` and to be
-# the thing the engine turns the turret about. Import makes it an Empty, and
-# exporting only meshes dropped it and re-rooted its children onto the hull --
-# the geometry still landed in the right place, so nothing looked wrong in
-# Blender and the turret simply stopped moving in the game.
+# A turret's pivot has no vertices: it carries ``$rotate=`` and is what the
+# engine turns the turret about. Import makes it an Empty. Exporting only meshes
+# dropped it and re-rooted its children onto the hull -- the geometry still
+# landed in the right place, so only the game showed it, as a turret that had
+# stopped moving.
 PIVOT_OFFSET = (0.0, 0.0, 4.0)
 TURRET_OFFSET = (0.0, 2.0, 0.0)
 PIVOT_PROPS = "$rotate=2.5"
@@ -705,13 +683,12 @@ if "Pivot" in joint_by_name:
 
 
 # --- 11. a marker with no exported parent ------------------------------
-# It cannot say "attached to the model itself" -- the format has no such value
-# -- so it is attached to a root submodel. That makes the frame it is measured
-# from the root submodel's origin, not the world origin: the engine adds the
-# root's offset back on (GetPolyModelPointInWorld walks from the marker's parent
-# submodel up the chain), so measuring from the world moved the gun by exactly
-# that offset. Reachable without hand-authoring: Selected Only, with the marker
-# selected and its parent mesh not.
+# The format has no "attached to the model itself" value, so such a marker is
+# attached to a root submodel and measured from that submodel's origin, not the
+# world origin: the engine adds the root's offset back on
+# (GetPolyModelPointInWorld walks up from the marker's parent submodel), so
+# measuring from the world moved the gun by exactly that offset. Reachable
+# without hand-authoring: Selected Only, marker selected, parent mesh not.
 def engine_position(model, parent, point):
     """Where the engine puts a marker: its point plus every offset above it."""
     x, y, z = point.as_tuple()
@@ -753,10 +730,9 @@ if loose_model.gun_banks:
 
 # --- 12. marker order is data, not decoration ---------------------------
 # WBAT cites gun banks by index, and Descent 3 bolts hardware to specific attach
-# point indices. Export finds markers by walking bpy.data.objects, which Blender
-# sorts as text, so from ten markers up ``Gun_10`` falls between ``Gun_1`` and
-# ``Gun_2`` and the banks come out permuted. Under ten the two orders agree,
-# which is why this needs twelve.
+# point indices. Export walks bpy.data.objects, which Blender sorts as text, so
+# from ten markers up ``Gun_10`` falls between ``Gun_1`` and ``Gun_2`` and the
+# banks come out permuted. Under ten the two orders agree, hence twelve.
 MANY = 12
 
 wipe()
@@ -778,8 +754,7 @@ check("gun banks are exported in name order, not text order",
       str(exported_order))
 
 # --- 13. "up" really is up ------------------------------------------------
-# The one assertion a human can sanity-check by eye: a model's up axis in
-# Descent must point up in Blender.
+# The one assertion a human can sanity-check by eye.
 check("Descent +Y (up) imports as Blender +Z (up)",
       descent_to_blender(Vector3(0, 1, 0)).as_tuple() == (0, 0, 1))
 check("Blender +Z (up) exports as Descent +Y (up)",

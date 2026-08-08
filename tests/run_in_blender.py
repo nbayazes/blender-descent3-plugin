@@ -6,21 +6,16 @@
 ``--python-exit-code 1`` is not optional. Blender exits 0 when a ``--python``
 script raises, so without it a run that never reached :func:`main` -- a syntax
 error, an import that dies at module scope, a collection error -- reports
-success. The ``sys.exit`` at the bottom does propagate on its own, which is
-exactly what makes the omission invisible: every failure the suite is *able* to
-report already sets the code, and only the failures that stop it reporting
-anything are the ones that need the flag.
+success. The ``sys.exit`` at the bottom covers every failure the suite is
+*able* to report, which is what makes the omission invisible.
 
-Why bother, when ``pytest`` on the command line already runs the same tests?
-Because it runs them against *your system* Python. Blender ships its own
-interpreter, and the add-on only ever executes there. Running the suite inside
-Blender is what proves the code works on the Python version your users actually
-have -- a syntax feature or a stdlib module that exists in your 3.13 and not in
-Blender's would otherwise sail through CI and fail on their machine.
+Command-line ``pytest`` runs the same tests against *your system* Python;
+Blender ships its own interpreter and the add-on only ever executes there, so
+only this run proves the code works on the Python version users have.
 
-Blender does not bundle pytest. This script finds it, and if it cannot, prints
-the exact command to install it -- built from the running Blender's own
-interpreter path, so it is correct for whichever build you launched.
+Blender does not bundle pytest. This script finds it, or prints the install
+command -- built from the running Blender's own interpreter path, so it is
+correct for whichever build was launched.
 
 Exits non-zero if any test fails -- and, given the flag above, if the suite
 could not be run at all.
@@ -29,10 +24,9 @@ could not be run at all.
 import os
 import sys
 
-#: Directory this script will add to ``sys.path`` if pytest is not already
-#: importable. Keeping pytest here rather than inside Blender means a Blender
-#: update (or a Steam verify) cannot wipe it, and nothing under the Blender
-#: install is modified. It is git-ignored.
+#: Directory added to ``sys.path`` if pytest is not already importable.
+#: Git-ignored, and inside the repo rather than the Blender install, so a
+#: Blender update or Steam verify cannot wipe it.
 VENDOR_DIRNAME = ".pytest-blender"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,7 +39,7 @@ def _blender_python() -> str:
     Returns:
         ``sys.executable``, which inside Blender is the bundled
         ``python/bin/python.exe`` rather than the Blender binary -- so it is
-        directly usable as a pip entry point.
+        usable as a pip entry point.
     """
     return sys.executable
 
@@ -61,7 +55,7 @@ def _load_pytest():
     """Import pytest, falling back to the vendored directory.
 
     Returns:
-        The imported ``pytest`` module, or ``None`` if it is not available.
+        The ``pytest`` module, or ``None`` if it is not available.
     """
     try:
         import pytest  # noqa: F401
@@ -108,9 +102,8 @@ def main() -> int:
     # different interpreter than the one the command-line runs use.
     args = ["-q", "--no-header", "-p", "no:cacheprovider"]
 
-    # Anything after a bare "--" is passed straight to pytest, so the usual
+    # Anything after a bare "--" is passed straight to pytest, e.g.
     #     ... --python tests/run_in_blender.py -- -k naming -v
-    # works. Without it, default to the whole suite.
     extra = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     args.extend(extra or ["tests"])
 

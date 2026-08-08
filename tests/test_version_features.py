@@ -3,9 +3,8 @@ Tests for the POF version capability matrix.
 
 The reader and the writer must agree, for every version, about which optional
 fields a record carries -- disagree by one field and every byte after it is
-misread. Both sides ask :func:`features_for`, so these tests pin the matrix
-itself and then prove the agreement by round-tripping a model at each version
-that sits on a feature boundary.
+misread. Both sides ask :func:`features_for`, so these pin the matrix and then
+round-trip a model at each version that sits on a feature boundary.
 
 Run with: python -m pytest tests/test_version_features.py -v
 """
@@ -33,8 +32,7 @@ from descent3_plugin.poformat import (
     write_pof,
 )
 
-#: Versions worth exercising: the oldest accepted, each feature boundary, and
-#: the newest written.
+#: The oldest accepted version, each feature boundary, and the newest written.
 BOUNDARY_VERSIONS = [1807, 1908, 2100, 2200, 2300]
 
 
@@ -90,9 +88,9 @@ class TestFeatureMatrix:
     def test_major_version_argument_wins_over_derived(self):
         """POFModel stores both fields, so the caller's value must be honoured.
 
-        A model whose major_version disagrees with its version keeps whatever
-        layout major_version implies -- that is what the pre-matrix code did at
-        each call site, and the writer must not silently switch layout.
+        A model whose major_version disagrees with its version keeps the layout
+        major_version implies, matching what each call site did before the
+        matrix existed; the writer must not silently switch layout.
         """
         assert features_for(2300, major_version=21).vertex_alpha is False
         assert features_for(2100, major_version=23).vertex_alpha is True
@@ -157,9 +155,9 @@ def _model_at(version):
 class TestPerVersionRoundtrip:
     """Prove reader/writer agreement at every feature boundary.
 
-    A layout disagreement does not fail politely: the reader walks off into the
-    next field and the damage shows up as wrong geometry, so these assert the
-    payload, not just that parsing returned.
+    A layout disagreement does not fail politely -- the reader walks off into
+    the next field and the damage shows up as wrong geometry -- so these assert
+    the payload, not just that parsing returned.
     """
 
     @pytest.mark.parametrize("version", BOUNDARY_VERSIONS)
@@ -209,8 +207,8 @@ class TestPerVersionRoundtrip:
         """Every byte written must be accounted for by the reader.
 
         Chunk headers carry their own length and the parser seeks to each chunk
-        end, so a size disagreement inside a chunk would otherwise be silently
-        skipped over instead of surfacing.
+        end, so a size disagreement inside a chunk would otherwise be skipped
+        over silently instead of surfacing.
         """
         data = write_pof(_model_at(version))
         result = parse_pof(data)

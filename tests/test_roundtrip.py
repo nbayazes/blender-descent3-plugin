@@ -3,9 +3,8 @@ Full-fidelity write -> parse round-trip tests.
 
 ``test_poformat.py`` covers the reader in depth but only checks *counts* on the
 writer side, so field-level corruption goes unnoticed. These tests assert that
-every value a submodel carries -- positions, normals, alpha, per-face-vertex
-UVs, texture indices, offsets, hierarchy -- comes back unchanged after a trip
-through ``write_pof`` and ``parse_pof``.
+every value a submodel carries comes back unchanged after a trip through
+``write_pof`` and ``parse_pof``.
 
 Run with: python -m pytest tests/test_roundtrip.py -v
 """
@@ -27,9 +26,8 @@ from descent3_plugin.poformat import (
     write_pof,
 )
 
-# POF stores floats as 32-bit, so exact equality only holds for values that are
-# representable there. Test data below sticks to binary fractions where it can;
-# this tolerance covers the rest.
+# POF stores floats as 32-bit, so exact equality only holds for values
+# representable there; test data sticks to binary fractions where it can.
 TOL = dict(rel=1e-6, abs=1e-6)
 
 
@@ -41,9 +39,8 @@ def flat(pairs):
     """Flatten [(u, v), ...] to [u, v, ...].
 
     ``pytest.approx`` only applies its tolerance to a flat sequence of numbers;
-    given a list of tuples it silently falls back to exact comparison, which
-    would make these assertions pass or fail on float32 rounding rather than on
-    the behaviour under test.
+    given a list of tuples it silently falls back to exact comparison, so the
+    assertions would turn on float32 rounding rather than the behaviour tested.
     """
     return [component for pair in pairs for component in pair]
 
@@ -52,10 +49,6 @@ def roundtrip(model: POFModel) -> POFModel:
     """Write a model to bytes and parse it back."""
     return parse_pof(write_pof(model))
 
-
-# ---------------------------------------------------------------------------
-# Builders
-# ---------------------------------------------------------------------------
 
 def make_quad(z=0.0, texnum=0, uvs=None):
     """A 4-vertex square face plus its vertices, at height ``z``."""
@@ -87,7 +80,6 @@ def make_rich_model() -> POFModel:
     model.min_bound = Vector3(-1.0, -1.0, -0.5)
     model.max_bound = Vector3(1.0, 1.0, 1.5)
 
-    # Root: textured quad.
     verts, face = make_quad(z=0.0, texnum=0)
     root = Submodel(
         index=0,
@@ -105,7 +97,6 @@ def make_rich_model() -> POFModel:
         faces=[face],
     )
 
-    # Child: offset from parent, second texture, non-default movement + props.
     verts, face = make_quad(z=0.5, texnum=1)
     child = Submodel(
         index=1,
@@ -121,7 +112,6 @@ def make_rich_model() -> POFModel:
         faces=[face],
     )
 
-    # Grandchild: an untextured (solid colour) face and per-vertex alpha.
     verts, _ = make_quad(z=1.0)
     for v, a in zip(verts, (1.0, 0.75, 0.5, 0.25)):
         v.alpha = a
@@ -145,10 +135,6 @@ def make_rich_model() -> POFModel:
     return model
 
 
-# ---------------------------------------------------------------------------
-# Model-level fields
-# ---------------------------------------------------------------------------
-
 class TestModelFields:
     @pytest.fixture
     def result(self):
@@ -171,10 +157,6 @@ class TestModelFields:
     def test_submodel_count(self, result):
         assert len(result.submodels) == 3
 
-
-# ---------------------------------------------------------------------------
-# Submodel fields
-# ---------------------------------------------------------------------------
 
 class TestSubmodelFields:
     @pytest.fixture
@@ -226,10 +208,6 @@ class TestSubmodelFields:
         assert child.children == [2]
 
 
-# ---------------------------------------------------------------------------
-# Geometry
-# ---------------------------------------------------------------------------
-
 class TestGeometry:
     @pytest.fixture
     def result(self):
@@ -277,10 +255,6 @@ class TestGeometry:
         for got_c, want_c in zip((face.color.r, face.color.g, face.color.b), want):
             assert got_c == pytest.approx(want_c, abs=1.0 / 255.0)
 
-
-# ---------------------------------------------------------------------------
-# UVs -- the part most likely to silently corrupt
-# ---------------------------------------------------------------------------
 
 class TestFunkyUVs:
     def _model_with_uvs(self, uvs):
@@ -333,7 +307,6 @@ class TestFunkyUVs:
             SubmodelVertex(position=Vector3(x, y, 0.0), normal=Vector3(0, 0, 1))
             for x, y in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
         ]
-        # Two faces sharing vertices 1 and 2, with deliberately different UVs.
         face_a = ModelFace(
             textured=True,
             texnum=0,
@@ -373,14 +346,9 @@ class TestFunkyUVs:
         )
 
 
-# ---------------------------------------------------------------------------
-# Submodel index handling
-# ---------------------------------------------------------------------------
-
 class TestSubmodelIndices:
     """SOBJ chunks carry their own index; nothing guarantees they arrive in
-    order or that the set is dense. Real models built by third-party tools hit
-    both cases.
+    order or that the set is dense. Third-party tools produce both.
     """
 
     def _two_submodels(self, first_index, second_index):
@@ -417,10 +385,6 @@ class TestSubmodelIndices:
         root = next(sm for sm in result.submodels if sm.index == 0)
         assert root.children == [2]
 
-
-# ---------------------------------------------------------------------------
-# Points and attachments
-# ---------------------------------------------------------------------------
 
 class TestPointsRoundtrip:
     def test_gun_banks(self):
@@ -473,10 +437,6 @@ class TestPointsRoundtrip:
         )
 
 
-# ---------------------------------------------------------------------------
-# Animation
-# ---------------------------------------------------------------------------
-
 def _animated_model(version, major, counts):
     model = POFModel(version=version, major_version=major)
     for i, n in enumerate(counts):
@@ -506,9 +466,8 @@ class TestAnimationRoundtrip:
         """
         model = _animated_model(2100, 21, [3, 1])
         result = roundtrip(model)
-        # The format cannot express uneven counts, so every submodel comes back
-        # with the same number of keys -- but it must parse, and the keys that
-        # were written must survive in order.
+        # The format cannot express uneven counts: every submodel comes back
+        # with the same key count, but written keys must survive in order.
         counts = {len(sm.keyframes) for sm in result.submodels}
         assert counts == {3}
         assert [kf.angle for kf in result.submodels[0].keyframes] == [0, 1, 2]
@@ -548,7 +507,7 @@ class TestAnimationRoundtrip:
         )
 
     def test_declared_key_count_matches_what_is_written(self):
-        """num_key_angles is the count the reader trusts. If a submodel claims
+        """num_key_angles is the count the reader trusts: if a submodel claims
         more keys than its list holds, the writer must still emit that many or
         the reader runs past the end of the chunk.
         """
@@ -567,10 +526,6 @@ class TestAnimationRoundtrip:
         result = roundtrip(model)
         assert all(not sm.keyframes for sm in result.submodels)
 
-
-# ---------------------------------------------------------------------------
-# Text encoding
-# ---------------------------------------------------------------------------
 
 class TestNames:
     def test_ascii_name_roundtrip(self):

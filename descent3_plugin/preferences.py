@@ -1,16 +1,9 @@
 """Add-on preferences: the settings that belong to the *user*, not the project.
 
-The split from :mod:`config` is deliberate. A ``descent3.toml`` describes a
-project's conventions and is checked in beside its models, so everyone working
-on that project gets the same naming and the same round-trip behaviour. The
-settings here are personal and follow the user between projects instead: where
-their own copy of the game's textures lives, how big they like the viewport
-markers. Putting either kind in the other's home is how you end up with one
-person's absolute texture path committed to somebody else's repository.
-
-Preferences are also discoverable in a way a file is not -- they appear under
-Edit > Preferences > Add-ons -- which is why they are the right home for
-anything a user is expected to change.
+The split from :mod:`config` is deliberate: a checked-in ``descent3.toml``
+describes a project's conventions, while these settings are personal and follow
+the user between projects. Mixing the two commits one person's absolute texture
+path to somebody else's repository.
 """
 
 import logging
@@ -26,9 +19,9 @@ log = logging.getLogger(__package__)
 class Descent3Preferences(bpy.types.AddonPreferences):
     """User-level settings for the Descent 3 add-on."""
 
-    # Must match the add-on's module name. Using __package__ keeps this correct
-    # under both the legacy add-on path and the extension loader, where the
-    # module is nested under bl_ext.
+    # Must match the add-on's module name; __package__ stays correct under both
+    # the legacy add-on path and the extension loader, where the module is
+    # nested under bl_ext.
     bl_idname = __package__
 
     texture_library: StringProperty(
@@ -80,25 +73,19 @@ class Descent3Preferences(bpy.types.AddonPreferences):
 def get_preferences(context: bpy.types.Context) -> Descent3Preferences | None:
     """Return the add-on's preferences, or ``None`` if they are unavailable.
 
-    Args:
-        context: Blender context to read the preferences from.
-
     Returns:
-        The preferences, or ``None`` when the add-on is not registered -- which
-        is the normal case for the headless scripts that call the conversion
-        functions directly. Callers fall back to the built-in defaults, so the
-        import path never depends on preferences existing.
+        The preferences, or ``None`` when the add-on is not registered -- the
+        normal case for headless scripts calling the conversion functions
+        directly. Callers fall back to the built-in defaults.
     """
     try:
         addon = context.preferences.addons[__package__]
     except (AttributeError, KeyError) as e:
-        # Expected whenever the conversion functions are driven directly rather
-        # than through the operators, which is how the headless scripts run --
-        # so this is debug, not a warning. Callers fall back to the defaults.
+        # Expected when the conversion functions are driven directly rather than
+        # through the operators (the headless scripts), so debug, not a warning.
         log.debug("Add-on preferences unavailable (%s); using defaults", e)
         return None
     return getattr(addon, "preferences", None)
 
 
-#: bpy types this module contributes to add-on registration.
 classes = (Descent3Preferences,)

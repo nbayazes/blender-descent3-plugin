@@ -1,8 +1,7 @@
 """Texture-resolution helpers for the Descent 3 importer.
 
-These functions are deliberately free of any ``bpy`` dependency so they can be
-unit-tested without Blender. They deal only with mapping a Descent 3 texture
-name to an image file on disk.
+Deliberately free of any ``bpy`` dependency so they can be unit-tested without
+Blender.
 """
 
 from __future__ import annotations
@@ -22,12 +21,8 @@ IMAGE_EXTENSIONS = [".png", ".bmp", ".tga", ".jpg", ".jpeg", ".ogf", ".pcx"]
 def clean_texture_dir(raw: str) -> str:
     """Normalize a user-entered texture directory string.
 
-    The import dialog can only offer a plain text field, so users paste paths.
-    Windows "Copy as path" wraps the path in double quotes and pasting can add
-    stray whitespace, so strip both.
-
-    Args:
-        raw: The value as typed or pasted into the Texture Folder field.
+    The import dialog can only offer a plain text field, so users paste paths,
+    and Windows "Copy as path" wraps them in double quotes.
 
     Returns:
         The path with surrounding whitespace and quotes removed, or ``""`` for
@@ -45,10 +40,9 @@ def find_texture_image(
 ) -> str | None:
     """Return the path of an image file matching ``texture_name``, or None.
 
-    Each directory is checked in order. Within a directory an exact
-    ``name + extension`` match is tried first (fast path), then a
-    case-insensitive match against the directory listing (Descent 3 texture
-    names do not always match the bitmap file's case). The first match wins.
+    Each directory is checked in order, exact ``name + extension`` first and
+    then case-insensitively against the directory listing, since Descent 3
+    texture names do not always match the bitmap file's case. First match wins.
 
     Args:
         texture_name: Texture name as stored in the model's TXTR chunk,
@@ -57,25 +51,24 @@ def find_texture_image(
             empty or are not directories are skipped. Must be re-iterable: it is
             walked once to search and again to report a failure.
         extensions: Extensions to try, in priority order, lower-cased and
-            dot-prefixed. Defaults to :data:`IMAGE_EXTENSIONS`; a project can
-            override the order through its configuration.
+            dot-prefixed. ``IMAGE_EXTENSIONS`` is only the default; a project
+            can override both the list and its order through
+            ``config.textures.extensions``.
 
     Returns:
         The full path of the first matching image, or ``None`` if no directory
-        holds one. A missing texture is reported to the user rather than
-        raising, so one absent bitmap does not abort a whole import.
+        holds one -- a missing texture is reported rather than raised, so one
+        absent bitmap does not abort a whole import.
     """
     name_lower = texture_name.lower()
     for directory in search_dirs:
         if not directory or not os.path.isdir(directory):
             continue
-        # 1) Fast path: exact stem + a known extension.
         for ext in extensions:
             path = os.path.join(directory, texture_name + ext)
             if os.path.isfile(path):
                 log.info("Found texture: %s", path)
                 return path
-        # 2) Case-insensitive match against the directory listing.
         try:
             for fn in os.listdir(directory):
                 stem, ext = os.path.splitext(fn)

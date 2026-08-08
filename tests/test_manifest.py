@@ -1,20 +1,15 @@
 """
 Tests for the Blender extension manifest and what the installers do with it.
 
-``blender_manifest.toml`` is the canonical source of the add-on's version: both
-installers read it from there. Blender will not let it be the *only* source,
-though -- ``addon_utils.modules()`` pulls ``bl_info`` out of ``__init__.py``
-with ``ast.literal_eval`` and never imports the module, so a computed version
-raises and the add-on disappears from Edit > Preferences > Add-ons. The literal
-in ``bl_info`` therefore has to stay, and this module is what stops the two
-drifting apart.
+``blender_manifest.toml`` is the canonical source of the add-on's version, but
+it cannot be the *only* one: ``addon_utils.modules()`` pulls ``bl_info`` out of
+``__init__.py`` with ``ast.literal_eval`` and never imports the module, so a
+computed version raises and the add-on disappears from Preferences. The literal
+has to stay, and this module stops the two drifting apart.
 
-Installing is checked here too, for the same reason: both scripts used to
-restate the package contents as a hardcoded list, with nothing comparing that
-list to the package. They read the folder now, so the checks below install into
-a throwaway directory and look at what actually arrived -- which holds however
-the scripts decide what to copy, and is the only form of the question that
-cannot itself go stale.
+Installing is checked by running the scripts into a throwaway directory and
+looking at what arrived: both once restated the package contents as a hardcoded
+list that nothing compared to the package.
 
 Run with: python -m pytest tests/test_manifest.py -v
 """
@@ -34,43 +29,35 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_DIR = os.path.join(REPO_ROOT, "descent3_plugin")
 MANIFEST_PATH = os.path.join(PACKAGE_DIR, "blender_manifest.toml")
 
-#: The manifest's filename on its own, for the checks that go looking for the
-#: file at an install destination rather than reading the one in the repo.
+#: The manifest's filename alone, for the checks that look for it at an install
+#: destination rather than reading the copy in the repo.
 MANIFEST_FILENAME = os.path.basename(MANIFEST_PATH)
 
-#: The installer scripts, which have to stay in step with each other and with
-#: the package. Parametrising on this instead of repeating the pair means a
-#: third installer cannot be added with only some of these checks applying.
+#: The installer scripts. Parametrising on this instead of repeating the pair
+#: means a third installer cannot be added with only some checks applying.
 INSTALLERS = ("install.ps1", "install.sh")
 
 #: The one module an installer may name outright: it is what makes the folder a
 #: package, so both scripts check for it before believing they have found the
-#: add-on source at all. Every other module has to be discovered from the folder
-#: rather than written down a second time.
+#: add-on source. Every other module has to be discovered from the folder.
 NAMEABLE_MODULE = "__init__.py"
 
-#: Where to look for a ``bash`` that can run ``install.sh``, in order.
-#:
-#: PATH first, because a machine with a real bash on it has the one its owner
-#: chose. The Git for Windows paths are the fallback, and they exist because
-#: PATH lies on stock Windows 11: it carries a ``bash.exe`` *app-execution
-#: alias* ahead of everything else, and that alias launches WSL. With no distro
-#: installed it prints "Windows Subsystem for Linux has no installed
-#: distributions" as UTF-16 and exits 1 for any script it is handed -- so the
-#: install.sh half of these checks failed with a wall of NUL-separated text
-#: about WSL, on a machine with a perfectly good bash in Git's own bin folder.
-#:
-#: Running pytest from Git Bash hid it, because that PATH finds Git's bash
-#: first. The suite was green in one shell and red in the other.
+#: Where to look for a ``bash`` that can run ``install.sh``, in order. PATH
+#: first, then Git for Windows: on stock Windows 11 a ``bash.exe`` app-execution
+#: alias sits ahead of everything on PATH and launches WSL, which with no distro
+#: installed exits 1 for any script, printing UTF-16 noise about distributions.
+#: Which one answers depends on the shell pytest was launched from: Git Bash
+#: puts its own bash ahead of the alias and these checks pass, while from
+#: PowerShell or cmd the alias wins and they fail -- green in one shell and red
+#: in the other on the same machine, which is why it looked non-reproducible.
 BASH_CANDIDATES = (
     "bash",
     r"C:\Program Files\Git\bin\bash.exe",
     r"C:\Program Files (x86)\Git\bin\bash.exe",
 )
 
-#: Seconds to let a candidate prove itself before giving up on it. Generous for
-#: what it is -- ``bash -c exit 0`` -- but the WSL alias can spend a moment
-#: deciding it has nothing to run.
+#: Seconds to wait on ``bash -c 'exit 0'``. Generous because the WSL alias can
+#: spend a moment deciding it has nothing to run.
 BASH_PROBE_TIMEOUT = 20
 
 
@@ -84,9 +71,7 @@ def package_modules() -> list[str]:
     """Return every module the package ships, as bare filenames.
 
     Read off the directory rather than listed here, so a module added to the
-    package is immediately something the installers are measured against. A
-    second hand-maintained list would drift exactly the way the installers'
-    own lists did.
+    package is immediately something the installers are measured against.
 
     Returns:
         Sorted ``*.py`` filenames in ``descent3_plugin/``.
@@ -98,13 +83,10 @@ def package_modules() -> list[str]:
 def working_bash() -> str | None:
     """Return a ``bash`` that can actually run a script, or ``None``.
 
-    Every candidate is *run*, not merely located. Being on PATH is exactly what
-    says nothing here: the WSL alias described on :data:`BASH_CANDIDATES` is
-    present, resolves, and fails -- so a ``shutil.which`` that finds it produces
-    an install.sh "failure" that install.sh had no part in.
-
-    Cached because this spawns a process, and the answer cannot change during a
-    run.
+    Every candidate is *run*, not merely located: the WSL alias described on
+    :data:`BASH_CANDIDATES` resolves but fails, so a ``shutil.which`` hit alone
+    yields an install.sh "failure" install.sh had no part in. Cached because
+    this spawns a process.
 
     Returns:
         Path of the first candidate that exits 0 for ``bash -c 'exit 0'``, or
@@ -136,14 +118,12 @@ def run_installer(script: str, target) -> subprocess.CompletedProcess:
 
     Args:
         script: One of :data:`INSTALLERS`.
-        target: Directory to install into, standing in for a ``scripts/addons``
-            folder.
+        target: Directory to install into, standing in for ``scripts/addons``.
 
     Returns:
         The completed process. The calling test is skipped instead when the
-        interpreter that script needs is absent or cannot run -- neither script
-        is meant to run on the other's platform, and skipping says which half of
-        the check actually ran rather than pretending both did.
+        interpreter that script needs is absent or cannot run, so the report
+        says which half of the check ran rather than pretending both did.
     """
     script_path = os.path.join(REPO_ROOT, script)
     if script.endswith(".ps1"):
@@ -176,7 +156,7 @@ def installed_package(request, tmp_path_factory):
     """Install with one of the scripts and hand back what it produced.
 
     Module-scoped and parametrised rather than a plain helper, so each script
-    runs once for all the checks that read the result instead of once per
+    runs once for all the checks that read its result instead of once per
     check: these are real subprocesses copying real files.
 
     Returns:
@@ -249,7 +229,7 @@ class TestVersionIsSingleSourced:
         """It must stay literal, or the add-on vanishes from Preferences.
 
         addon_utils.modules() ast-parses bl_info with literal_eval without
-        importing the module. A function call there raises ValueError and the
+        importing the module; a function call there raises ValueError and the
         add-on is never listed, so it cannot be enabled through the UI at all.
         """
         source = open(
@@ -288,11 +268,10 @@ class TestInstallersReadTheManifest:
     def test_installer_ships_the_manifest(self, installed_package):
         """The package is useless as an extension if the manifest is not copied.
 
-        Both installers used to glob '*.py' only, which is why the previous
-        manifest sat in the repo for its whole life without ever reaching a
-        Blender install. Naming the file somewhere in the script is no evidence
-        that it is copied -- that is all the check above can say -- so this one
-        installs into a throwaway directory and looks for the file afterwards.
+        Both installers used to glob '*.py' only, so the previous manifest sat
+        in the repo without ever reaching a Blender install. Naming the file in
+        a script is no evidence it is copied, so this one installs into a
+        throwaway directory and looks for the file afterwards.
         """
         script, destination = installed_package
         installed = os.path.join(destination, MANIFEST_FILENAME)
@@ -317,11 +296,10 @@ class TestInstallersShipTheWholePackage:
 
     Both scripts once restated the package contents as a hardcoded list, which
     is how the README, the skill docs and both installers came to disagree with
-    the package all at once. They read the folder now, but the question worth
-    asking does not depend on that, and it is asked of the result rather than
-    the source: after running the script, is every module really there? A
-    missing one is not a missing feature -- ``from . import poformat`` raises
-    and the add-on does not register at all.
+    the package at once. Whether every module really arrived is asked of the
+    result rather than the source, so it holds however the scripts decide what
+    to copy. A missing module is not a missing feature -- the package's
+    ``from . import`` raises and nothing registers.
     """
 
     def test_installer_installs_every_module(self, installed_package):
@@ -339,9 +317,8 @@ class TestInstallersShipTheWholePackage:
     def test_installer_does_not_restate_the_package_contents(self, script):
         """A module list written into a script is a copy that goes stale.
 
-        This is the check the hardcoded lists never had. It runs everywhere,
-        including where the sibling script's interpreter is missing and the
-        install itself has to be skipped.
+        Runs everywhere, including where the sibling script's interpreter is
+        missing and the install itself has to be skipped.
         """
         with open(os.path.join(REPO_ROOT, script), encoding="utf-8") as f:
             text = f.read()

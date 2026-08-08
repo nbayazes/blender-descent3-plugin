@@ -20,11 +20,6 @@ class Vector3:
 
     Deliberately not ``mathutils.Vector``: this type has to stay constructible
     outside Blender so the parser can be unit-tested.
-
-    Attributes:
-        x: First component.
-        y: Second component.
-        z: Third component.
     """
 
     x: float = 0.0
@@ -55,9 +50,9 @@ class Vector3:
         """Return a unit-length copy of this vector.
 
         Returns:
-            A vector of length 1 in the same direction, or a zero vector if this
-            one is shorter than :data:`NORMALIZE_EPSILON`. Degenerate input is
-            common in real models, so it yields zero rather than raising.
+            A vector of length 1 in the same direction, or zero if this one is
+            shorter than :data:`NORMALIZE_EPSILON`. Degenerate input is common
+            in real models, so it yields zero rather than raising.
         """
         m = self.magnitude()
         if m < NORMALIZE_EPSILON:
@@ -65,22 +60,13 @@ class Vector3:
         return Vector3(self.x / m, self.y / m, self.z / m)
 
 
-# ---------------------------------------------------------------------------
-# Coordinate systems
-# ---------------------------------------------------------------------------
-# Descent 3 is right-handed **Y-up**; Blender is right-handed **Z-up**. Both are
-# right-handed, so the difference is a single rotation of 90 degrees about X --
-# not a mirror. That matters: a rotation preserves winding order and handedness,
-# so faces do not need reversing and normals transform exactly like positions.
+# Descent 3 is right-handed **Y-up**, Blender right-handed **Z-up**: the
+# difference is a single 90 degree rotation about X, not a mirror, so winding
+# order is preserved and normals transform exactly like positions.
+# ``+Y up -> +Z up``, ``+Z back -> -Y back``, ``+X right -> +X right``.
 #
-#     Descent            Blender
-#     +Y  up        ->   +Z  up
-#     +Z  back      ->   -Y  back
-#     +X  right     ->   +X  right
-#
-# The conversion is applied at the Blender boundary only. Everything inside
-# poformat stays in file coordinates, so what the parser and writer exchange is
-# always exactly what is on disk.
+# Applied at the Blender boundary only -- everything inside poformat stays in
+# file coordinates, so parser and writer exchange exactly what is on disk.
 
 
 def descent_to_blender(v) -> Vector3:
@@ -99,8 +85,8 @@ def descent_to_blender(v) -> Vector3:
 def blender_to_descent(v) -> Vector3:
     """Convert a Blender (Z-up) vector to Descent 3 (Y-up) space.
 
-    The exact inverse of :func:`descent_to_blender`, so a model that makes the
-    trip in both directions comes back bit-for-bit unchanged.
+    The exact inverse of :func:`descent_to_blender`, so a model making the trip
+    in both directions comes back bit-for-bit unchanged.
 
     Args:
         v: Anything exposing ``x``, ``y`` and ``z`` -- a ``mathutils.Vector``
