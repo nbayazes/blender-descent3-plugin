@@ -1,17 +1,11 @@
 """Per-project configuration, read from a ``descent3.toml`` beside the models.
 
-The settings here are *conventions*, not preferences: importer and exporter must
-agree on them or a model stops surviving a round trip -- import naming a gun
-empty ``Gun_0`` while export looks for ``gun.0`` drops the point silently. Both
-halves read the same file, and the defaults below are the values the add-on used
-before the file existed, so a project with no ``descent3.toml`` behaves as
-always.
+Conventions the importer and exporter must both read and agree on; see
+``docs/configuration.md``, "Project settings -- descent3.toml", for the
+round-trip cost of disagreeing.
 
-Not the home for *user* preferences (texture library location, viewport marker
-size); those belong in the add-on preferences. Format constants -- version
-gates, chunk IDs, flag bits -- must not be here either: they are facts about a
-binary format, and a project that "configured" them would produce corrupt
-models.
+Not the home for *user* preferences or format constants --
+``docs/configuration.md`` says which setting belongs where.
 
 Free of any ``bpy`` dependency so it can be unit-tested without Blender.
 """
@@ -82,12 +76,10 @@ class TextureConfig:
         search_dirs: Extra directories to search, ahead of the model's own
             folder. Relative entries resolve against the config file, so a
             checked-in project keeps working on someone else's machine.
-        export_dir: Subfolder beside the exported model that written texture
-            images go into, relative to the ``.pof``. The default says
-            "exported" so generated images are not mistaken, by user or tool,
-            for hand-authored source art. Export-only: import does
-            not search it, so exports stay sandboxed from the models they came
-            from unless the folder is deliberately listed in ``search_dirs``.
+        export_dir: Subfolder beside the exported model for written texture
+            images. Named "exported" so generated images are not mistaken, by
+            user or tool, for hand-authored source art. Export-only -- see
+            ``docs/exporting.md``, "Exporting textures".
     """
 
     extensions: tuple[str, ...] = tuple(IMAGE_EXTENSIONS)

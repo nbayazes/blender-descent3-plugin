@@ -278,16 +278,10 @@ def save_pof(
 def _is_submodel(obj: bpy.types.Object) -> bool:
     """Return whether an object should be written to the file as a submodel.
 
-    Empties count as well as meshes: a submodel with no geometry is how Descent
-    3 spells a rotating joint, and exporting only meshes dropped a turret's
-    pivot and re-rooted its children onto the hull.
-
     Returns:
-        True for meshes, and for empties carrying
-        :data:`~descent3_plugin.constants.PROP_KEY_INDEX`. That property is the
-        whole test for an empty; "an empty that is not a marker" would sweep up
-        every light rig and organisational empty in the user's file. A
-        hand-built empty joins the model by being given that property.
+        True for meshes always; for empties only when they carry
+        :data:`~descent3_plugin.constants.PROP_KEY_INDEX` -- see
+        ``docs/custom-properties.md``, "pof_index -- the submodel's own index".
     """
     if obj.type == "MESH":
         return True
@@ -494,12 +488,9 @@ def _collect_textures(
     """Collect the texture names used by ``objects``.
 
     A material's recorded :data:`~descent3_plugin.constants.PROP_KEY_TEXTURE`
-    wins over its name: ``metal`` and ``metal.001`` are two real Descent 3
-    bitmaps, and reading the second as a Blender duplicate of the first merged
-    them and lost a texture from the model. Materials with no such record still
-    go through the ``.NNN`` heuristic in :mod:`~descent3_plugin.naming`, which
-    only collapses a suffixed name onto an original actually in the scene, and
-    warns when it does.
+    wins over its name; the rest fall back to the ``.NNN`` heuristic in
+    :mod:`~descent3_plugin.naming` -- see ``docs/exporting.md``, "Materials and
+    texture names".
 
     Args:
         depsgraph: Evaluated dependency graph. Slots are read off the
@@ -689,18 +680,12 @@ def _build_submodel(
 def _submodel_name(obj: bpy.types.Object) -> str:
     """Return the name to write into the submodel's SOBJ record.
 
-    Normally the object's name. The exception is Blender's uniquifying suffix:
-    two submodels may legally share a name -- the engine uses the field as a
-    label and never looks a submodel up by it -- so a file with two ``Wing``
-    submodels imports as ``Wing`` and ``Wing.001``, and writing that back put
-    Blender's bookkeeping into the model.
-
     Returns:
-        The name recorded from the file when the object still carries it and its
-        current name is that name, suffix or not; otherwise the object's name,
-        covering both a rename (the user's word beats the file's) and an object
-        nobody imported. See
-        :data:`~descent3_plugin.constants.PROP_KEY_SUBMODEL_NAME`.
+        The name recorded in
+        :data:`~descent3_plugin.constants.PROP_KEY_SUBMODEL_NAME` when the
+        object's current name is that name, suffix or not; otherwise the
+        object's own name. See ``docs/custom-properties.md``, "pof_name -- the
+        name the submodel had in the file".
     """
     recorded = obj.get(PROP_KEY_SUBMODEL_NAME)
     if recorded is None:
@@ -1079,13 +1064,8 @@ def _collect_points(
 ) -> list[_Marker]:
     """Collect empties whose name marks them as gun or attach points.
 
-    Only empties belonging to *this* export are collected: scanning the whole
-    file for a name prefix let a second ship in the same .blend donate its
-    ``Gun_*`` markers to whichever model was exported first, glued to submodel
-    0. Exporting everything takes every marker in the file; Selected Only takes
-    a marker that is itself selected or whose parent is one of the exported
-    objects, so selecting a hull brings the guns bolted to it without dragging
-    in the markers of a model that was not selected.
+    Only empties belonging to *this* export are collected -- see
+    ``docs/exporting.md``, "What gets exported".
 
     Args:
         name_prefix: Name prefix import used, from the project's naming

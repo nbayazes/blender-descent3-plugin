@@ -272,11 +272,8 @@ def _texture_search_dirs(
             library, or ``None`` when the add-on is not registered.
 
     Returns:
-        Directories in search order, most specific first: the dialog's Texture
-        Folder, the project's configured directories, the model's own folder,
-        the user's texture library. The folder export writes textures into is
-        deliberately *not* added -- a project may be sandboxed off from its own
-        exports on purpose, so it has to be listed in ``textures.search_dirs``.
+        Directories in search order, most specific first -- see
+        ``docs/textures.md``, "Search directories and their priority".
     """
     search_dirs: list[str] = []
     if operator is not None:
@@ -659,20 +656,9 @@ def _adopt_material(
 ) -> None:
     """Reuse a material that already exists in the scene under this texture name.
 
-    Reusing rather than creating keeps exactly one material per texture ID;
-    creating a second would leave the scene with ``<name>.001`` alongside it.
-
-    Reuse is not permission to *restyle*, though: the two were conflated until
-    importing a model with a ``Metal`` texture enabled nodes on the user's own
-    ``Metal`` material and wired an image into its Base Colour. So only a
-    material carrying :data:`~descent3_plugin.constants.PROP_KEY_ADDON_MATERIAL`
-    is finished off with an image; anything else is used exactly as it arrives,
-    with the user told so.
-
-    Adoption does record the *texture ID* when the material carries none, so
-    export writes the right ID even after a rename. That key is deliberately not
-    the authorship mark -- when it was, a user's material came out of one import
-    wearing what the next import read as this add-on's own signature.
+    Reused as it arrives unless this add-on created it; adoption records the
+    texture ID either way -- see ``docs/importing.md``, "A material you already
+    had is reused, never restyled".
 
     Args:
         tex_report: Texture name to whether the texture resolved; updated here.

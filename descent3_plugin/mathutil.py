@@ -60,13 +60,9 @@ class Vector3:
         return Vector3(self.x / m, self.y / m, self.z / m)
 
 
-# Descent 3 is right-handed **Y-up**, Blender right-handed **Z-up**: the
-# difference is a single 90 degree rotation about X, not a mirror, so winding
-# order is preserved and normals transform exactly like positions.
-# ``+Y up -> +Z up``, ``+Z back -> -Y back``, ``+X right -> +X right``.
-#
-# Applied at the Blender boundary only -- everything inside poformat stays in
-# file coordinates, so parser and writer exchange exactly what is on disk.
+# Y-up -> Z-up is a single rotation about X: (x, y, z) -> (x, -z, y).
+# In Descent's frame +X is right, +Y up and +Z back.
+# See docs/design-notes.md.
 
 
 def descent_to_blender(v) -> Vector3:

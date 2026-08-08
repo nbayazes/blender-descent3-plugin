@@ -4,15 +4,10 @@ Each rule here is a Blender datablock name being asked to carry something the
 file cares about -- a texture ID, a marker's index, a filename -- against
 Blender's own naming rules. They share one fact, :data:`DUPLICATE_SUFFIX_RE`.
 
-A Blender material's name *is* the Descent 3 texture ID: import names each
-material after the texture it came from, export maps it back into the TXTR
-chunk. ``bpy.data.materials.new()`` always mints a new datablock and Blender
-uniquifies names with ``.001``, so a second asset sharing a texture name
-produced ``Hull.001``, which export wrote into TXTR as a texture nothing on disk
-is called. Import now reuses an existing material of the right name and records
-the ID it used (:data:`~descent3_plugin.constants.PROP_KEY_TEXTURE`); this
-module is the second line of defence, for scenes polluted before that fix and
-for materials a user duplicates by hand.
+A material's name is its texture ID (``docs/exporting.md``, "Materials and
+texture names"); this module is the second line of defence, for names Blender or
+the user already uniquified. ``bpy.data.materials.new()`` mints a new datablock
+whatever name it is handed, which is where a ``.NNN`` comes from.
 
 A recorded ID *outranks* the suffix rule, because the suffix is a guess and the
 recording is evidence: ``metal`` and ``metal.001`` can be two real Descent
@@ -86,12 +81,9 @@ def is_uniquified_from(name: str, original: str) -> bool:
 def marker_order_key(name: str, prefix: str) -> tuple[int, int, str]:
     """Return a sort key restoring the file order of gun and attach markers.
 
-    Import names markers after their position in the file (``Gun_0``..``Gun_11``)
-    and export finds them by walking ``bpy.data.objects``, which Blender keeps
-    sorted *as text*: past nine markers ``Gun_10`` sorts between ``Gun_1`` and
-    ``Gun_2``. Not cosmetic -- the WBAT chunk cites a gun bank by index and
-    Descent 3 bolts specific hardware to specific attach-point indices, so a
-    permuted list swaps a ship's weapons around.
+    Import numbers markers by their position in the file (``Gun_0``..``Gun_11``).
+    ``bpy.data.objects`` is sorted as text, which permutes markers past nine;
+    ``docs/design-notes.md`` says why the index is a contract.
 
     Args:
         prefix: Marker prefix from the project's naming configuration, e.g.
