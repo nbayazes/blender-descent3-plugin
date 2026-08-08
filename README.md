@@ -17,6 +17,8 @@ keyframes.
   texture IDs, writing texture images.
 - [How textures are located](docs/textures.md) — the four search directories and
   their priority, extension order, case-insensitive fallback, missing textures.
+- [Custom properties](docs/custom-properties.md) — the `pof_*` and `d3_*` keys,
+  which datablock carries each, what export reads back, which to set by hand.
 - [Configuration](docs/configuration.md) — `descent3.toml` project settings,
   per-user add-on preferences, and the format constants that are not settings.
 - [Development](docs/development.md) — the `bpy`-free contract, the test runners
@@ -201,6 +203,7 @@ docs/                   the long-form documentation
   importing.md            material reuse, damaged files, marker orientation
   exporting.md            what is exported, texture names, texture images
   textures.md             how a texture name becomes an image file on import
+  custom-properties.md    the pof_* and d3_* keys and what export reads back
   configuration.md        descent3.toml, add-on preferences, format constants
   development.md          the bpy-free contract, the tests, versioning
   design-notes.md         decisions and the reasoning behind them

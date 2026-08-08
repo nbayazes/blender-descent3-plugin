@@ -4,7 +4,7 @@ A value used by only one half belongs in that half's module; a value defined by
 the POF byte stream belongs in :mod:`poformat`. The custom-property keys are the
 deliberate exception -- declared together even where only one half reads a key,
 because they are a contract with the user's saved ``.blend`` file and are only
-safe to review as a set.
+safe to review as a set. ``docs/custom-properties.md`` explains each one.
 
 Must stay free of ``bpy`` and of any :mod:`poformat` import: the package
 ``__init__`` imports this at module scope to build the File menu entries, so
@@ -29,86 +29,45 @@ POF_FILENAME_EXT = ".pof"
 #: name Descent 3 ships models under, ``.pof`` the name its tools write.
 POF_FILTER_GLOB = "*.pof;*.oof"
 
-# Import stores what it cannot represent as Blender data as a custom property on
-# the datablock it describes -- the object for submodel fields, the material for
-# the texture. Renaming a key silently drops that field from every model a user
-# has already imported. A key export never writes back is not dead: it records
-# what the file said, and is how the exporter recognises an object as ours.
+# These keys are a contract with the user's saved ``.blend``.
+# ``docs/custom-properties.md`` explains each one in full.
 
-#: Submodel's own index within the file (``Submodel.index``).
-#:
-#: Export reassigns indices from the export order rather than writing this back
-#: -- the exported set need not be the imported set, so a stored index collides
-#: or leaves gaps as soon as a subset is exported. It reads the key only to
-#: recognise a geometry-less submodel, which imports as an *Empty*, so that
-#: Empty is exported instead of dropped.
+#: Index of the submodel within the file (``Submodel.index``), on the *object*.
+#: Export reads only its presence, never the value.
 PROP_KEY_INDEX = "pof_index"
 
-#: Parent submodel index, or :data:`poformat.NO_PARENT` for a root submodel.
-#:
-#: Reference only. Export derives the hierarchy from Blender's own object
-#: parenting, so reading this back would override the user's outliner edits.
+#: Parent submodel's index on the *object*, or :data:`poformat.NO_PARENT` for a
+#: root submodel. Export does not read it back.
 PROP_KEY_PARENT = "pof_parent"
 
-#: ``SOF_*`` flag word derived from the submodel's property string.
-#:
-#: Reference only, never written back: the SOBJ record has no flag word. The
-#: engine re-derives every bit from the property string (reference/polymodel.cpp,
-#: SetPolymodelProperties), so :data:`PROP_KEY_PROPERTIES` carries the flags.
+#: ``SOF_*`` flag word derived from the submodel's property string, on the
+#: *object*. Export does not read it back.
 PROP_KEY_FLAGS = "pof_flags"
 
-#: ``bsp_info.movement_type``.
+#: ``bsp_info.movement_type``, on the *object*. Read back on export.
 PROP_KEY_MOVEMENT_TYPE = "pof_movement_type"
 
-#: ``bsp_info.movement_axis``.
+#: ``bsp_info.movement_axis``, on the *object*. Read back on export.
 PROP_KEY_MOVEMENT_AXIS = "pof_movement_axis"
 
-#: Raw SOBJ property string -- the ``$rotate=`` / ``$fov=`` text the engine
-#: parses. Kept verbatim so a round trip does not lose commands this add-on
-#: does not itself interpret.
+#: Raw SOBJ property string on the *object* -- the ``$rotate=`` / ``$fov=``
+#: text the engine parses. Read back on export.
 PROP_KEY_PROPERTIES = "pof_properties"
 
-#: Name the submodel had in the file, recorded on the object built from it.
-#:
-#: A file may legally hold two submodels called ``Wing`` -- the engine treats the
-#: field as a label, not an identifier -- and Blender uniquifies the second to
-#: ``Wing.001``, which export then wrote into the model. A file may equally state
-#: ``Wing`` and ``Wing.001`` itself, so the ``.NNN`` heuristic cannot settle it.
-#: Export prefers the recorded name only when the object's current name is that
-#: name plus Blender's suffix; any other rename is the user talking, and wins.
+#: Name the submodel had in the file, on the *object* built from it. Export
+#: reads it back, but only while the object still wears that name.
 PROP_KEY_SUBMODEL_NAME = "pof_name"
 
-#: Custom property on an *attach-point empty* recording that the file supplied
-#: an explicit up vector for it, in a NATH chunk.
-#:
-#: The direction and roll both live in the empty's rotation, so the vectors need
-#: no property -- but an attach point with no NATH entry leaves the attached
-#: model's roll undefined, a legal state rather than missing data, and every
-#: empty has a roll whether or not anybody chose one. Writing NATH for all of
-#: them invents an up vector the model never specified; writing it for none
-#: loses the one the model did state.
+#: Records that the file supplied an explicit up vector, in a NATH chunk, for
+#: this *attach-point empty*. Export reads it, and writes NATH only where set.
 PROP_KEY_HAS_UVEC = "pof_has_uvec"
 
-#: Custom property on a *Material* recording the Descent 3 texture ID it stands
-#: for. Import writes it, export reads it.
-#:
-#: The name alone is not enough: ``metal`` and ``metal.001`` can be two distinct
-#: bitmaps shipped by the game, indistinguishable by name from a material the
-#: user duplicated, and export merged them and lost the second texture. A
-#: material carrying this key exports as the ID it carries whatever Blender has
-#: since done to its name; only materials with no provenance fall back to the
-#: ``.NNN`` heuristic in :mod:`~descent3_plugin.naming`.
-#:
-#: Spelled ``d3_`` rather than ``pof_`` because it names a game asset rather than
-#: a POF record field, and is equally meaningful set by hand to pin the export
-#: name of a material the user authored.
+#: The Descent 3 texture ID a *Material* stands for. Import writes it, export
+#: reads it.
 PROP_KEY_TEXTURE = "d3_texture"
 
-#: Marks a *Material* this add-on created from nothing. Import writes and reads
-#: it; export ignores it. Distinct from :data:`PROP_KEY_TEXTURE` because that key
-#: is also stamped on *adopted* materials -- and may be set by hand to pin an
-#: export name -- so using it as the authorship signal let the second import
-#: restyle a material the user authored.
+#: Marks a *Material* this add-on created from nothing. Import writes and
+#: reads it; export ignores it.
 PROP_KEY_ADDON_MATERIAL = "d3_addon_material"
 
 # Gun points and attach points have no Blender equivalent, so they become
@@ -128,13 +87,8 @@ ATTACH_EMPTY_PREFIX = "Attach_"
 # import outside Blender.
 
 #: Local axis of a gun or attach empty that points where the marker points, in
-#: Blender space.
-#:
-#: +Z is the axis Blender draws a SINGLE_ARROW empty's arrow along, so the
-#: direction is visible in the viewport. Consequence: an unrotated new empty
-#: means "straight up", not the fixed forward direction every marker used to be
-#: written with -- a direction never read from anything, so the changed default
-#: is the first time the field has meant anything.
+#: Blender space. +Z is the axis Blender draws a SINGLE_ARROW empty's arrow
+#: along, so the arrow in the viewport is the direction written to the file.
 MARKER_FORWARD_AXIS = (0.0, 0.0, 1.0)
 
 #: Local axis standing for an attach point's up vector -- its roll about

@@ -28,31 +28,9 @@ Decisions that are not obvious from the code, and the reasoning behind them.
   parenting; submodels are keyed by their own index rather than list position,
   because SOBJ chunks can arrive out of order or with gaps.
 - **Custom properties carry what Blender cannot represent.** Movement type and
-  axis, and the raw `$rotate=` / `$fov=` property string, are stored on the
-  object so a round trip does not lose commands the add-on does not itself
-  interpret.
-  - `pof_flags` — the `SOF_*` flag bits. Stored, but not written back: the SOBJ
-    record has no flag word, and both the engine and this add-on's reader derive
-    every bit from the property string, so preserving that string verbatim is
-    what carries the flags across.
-  - `d3_texture` — on a material, the Descent 3 texture ID it stands for. The
-    material's *name* says the same thing until Blender renames the datablock or
-    the user does; a name is a guess where the property is evidence, which is
-    what stops `metal` and `metal.001` being merged into one texture on export.
-  - `d3_addon_material` — a second mark, carried only by materials the add-on
-    *created*, and the one that grants import permission to restyle them. Two
-    properties rather than one because they answer different questions: import
-    records `d3_texture` on a user's material too, so its faces export
-    correctly, and if that also meant "mine to edit" then the next import would
-    edit it.
-  - `pof_has_uvec` — on an attach-point empty, meaning the file fixed its roll
-    rather than leaving it undefined. Without it, export would write an up vector
-    for every attach point and invent a constraint the model never had.
-  - `pof_name` — on an object, the name its submodel had in the file, for the
-    same reason a material carries `d3_texture`: a POF may hold two submodels
-    called `Wing` and Blender may not, so the second object becomes `Wing.001`
-    and that suffix must not reach the model. Rename the object and the rename
-    wins — the recorded name is only preferred while the object still wears it.
+  axis, the `$rotate=` string, the texture a material stands for. Authorship
+  and texture identity are deliberately two keys rather than one, because they
+  answer different questions — see [Custom properties](custom-properties.md).
 - **A submodel with no geometry becomes an Empty, and exports as one.** That is
   how Descent 3 spells a joint: a turret's pivot has no vertices, it carries the
   `$rotate=` the engine turns its children with. Exporting only meshes drops it

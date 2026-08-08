@@ -56,10 +56,11 @@ survive a round trip; without it, export cannot tell that pair from one material
 you duplicated in the outliner, and merges them.
 
 Set `d3_texture` by hand (Material Properties → Custom Properties) to pin the
-export name of a material you authored yourself. Without it, the old rule applies:
-a `.NNN` suffix is treated as a Blender duplicate and collapsed onto the original,
-but only when that original is actually in the scene, and you are warned when it
-happens.
+export name of a material you authored yourself — see
+[Custom properties](custom-properties.md#d3_texture--the-texture-a-material-stands-for).
+Without it, the old rule applies: a `.NNN` suffix is treated as a Blender
+duplicate and collapsed onto the original, but only when that original is
+actually in the scene, and you are warned when it happens.
 
 Materials are read from each object's **material slots**, so a slot switched from
 *Data* to *Object* linking exports the material the viewport shows rather than

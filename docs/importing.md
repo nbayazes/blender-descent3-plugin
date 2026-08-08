@@ -20,10 +20,10 @@ rename that material and re-import to get the model's own texture.
 
 Materials the add-on created carry a `d3_addon_material` property, and *those* it
 does finish off with their image. That is deliberately a separate mark from
-`d3_texture`: adoption records `d3_texture` on your material so its faces still
-export as the right texture, and if that doubled as the add-on's signature a
-second import of the same model would treat your material as its own and restyle
-it.
+`d3_texture` (see [Custom properties](custom-properties.md)): adoption records
+`d3_texture` on your material so its faces still export as the right texture,
+and if that doubled as the add-on's signature a second import of the same model
+would treat your material as its own and restyle it.
 
 Damaged files are imported as far as they go rather than refused. A face pointing
 at a vertex the submodel does not have is dropped, as is anything Blender's own
