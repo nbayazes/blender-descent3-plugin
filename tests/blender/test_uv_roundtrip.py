@@ -1,14 +1,14 @@
 """
 Blender-side import/export round-trip check.
 
-pytest can only reach the ``bpy``-free code, so the mesh-building half of the
-add-on -- UV orientation in particular -- has to be exercised inside real
-Blender. Descent 3 puts the UV origin at the top-left and Blender at the
-bottom-left, so import negates V and export must negate it back; when only one
-side did, every exported texture came out vertically mirrored.
+pytest can only reach the ``bpy``-free code, so UV orientation has to be
+exercised inside real Blender. Descent 3 puts the UV origin at the top-left and
+Blender at the bottom-left, so import negates V and export must negate it back;
+when only one side did, every exported texture came out vertically mirrored.
 
 Run:
-    blender.exe --background --factory-startup --python tests/blender/test_uv_roundtrip.py
+    blender --background --factory-startup --python-exit-code 1 \
+        --python tests/blender/test_uv_roundtrip.py
 
 Exits non-zero on failure so it can be wired into CI.
 """
@@ -21,10 +21,10 @@ import bpy
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "descent3_importer"))
 
-import poformat  # noqa: E402
-from descent3_importer import export_pof, import_pof  # noqa: E402
+from descent3_plugin import poformat  # noqa: E402
+from descent3_plugin.export_pof import save_pof  # noqa: E402
+from descent3_plugin.import_pof import load_pof  # noqa: E402
 
 FIXTURE = os.path.join(REPO, "tests", "fixtures", "textured_model", "textured_cube.oof")
 
@@ -59,8 +59,8 @@ class FakeExportOp:
 def wipe():
     """Clear scene data between scenarios.
 
-    ``bpy.data.collections`` is deliberately left alone: removing the scene's
-    master collection children leaves the view layer without a valid object
+    ``bpy.data.collections`` is deliberately left alone: removing the scene
+    master collection's children leaves the view layer without a valid object
     list, and iterating it then yields None.
     """
     for coll in (bpy.data.objects, bpy.data.meshes, bpy.data.materials):
@@ -101,7 +101,7 @@ source = poformat.parse_pof(open(FIXTURE, "rb").read())
 source_uvs = model_uvs(source)
 check("fixture has UVs to compare", len(source_uvs) > 0, f"{len(source_uvs)} pairs")
 
-import_pof(bpy.context, FIXTURE, FakeImportOp())
+load_pof(bpy.context, FIXTURE, FakeImportOp())
 
 in_blender = scene_uvs()
 check("import produced the same number of UVs",
@@ -110,13 +110,12 @@ check("import negates V (Descent top-left origin -> Blender bottom-left)",
       in_blender == [(u, -v) for u, v in source_uvs])
 
 out_path = os.path.join(tempfile.gettempdir(), "descent3_uv_roundtrip.pof")
-export_pof(bpy.context, out_path, FakeExportOp())
+save_pof(bpy.context, out_path, FakeExportOp())
 exported_uvs = model_uvs(poformat.parse_pof(open(out_path, "rb").read()))
 
 check("export negates V back", exported_uvs == source_uvs,
       "" if exported_uvs == source_uvs else f"{exported_uvs[:4]} != {source_uvs[:4]}")
 
-# Geometry and materials should survive the same trip.
 reparsed = poformat.parse_pof(open(out_path, "rb").read())
 check("submodel count preserved",
       len(reparsed.submodels) == len(source.submodels))

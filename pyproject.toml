@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+minversion = "7.0"
+# Pins the rootdir and makes a bare `pytest` collect the suite from the repo
+# root or from tests/ without naming a path.
+#
+# What puts the repo root on sys.path is tests/__init__.py plus pytest's
+# default prepend import mode, not this file -- that is what lets the tests
+# import `descent3_plugin.poformat` instead of manipulating sys.path.
+# Deleting tests/__init__.py would break them even with this config present.
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

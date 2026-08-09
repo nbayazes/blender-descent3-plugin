@@ -89,7 +89,6 @@ def write_sobj(f, index=0, parent=-1, verts=None, faces=None, name="test", props
     write_int32_buf(buf, 0)  # movement_axis
     write_int32_buf(buf, 0)  # freespace chunks
 
-    # Vertices
     write_int32_buf(buf, len(verts))
     for v in verts:
         write_vector3_buf(buf, *v)
@@ -100,7 +99,6 @@ def write_sobj(f, index=0, parent=-1, verts=None, faces=None, name="test", props
     for _ in verts:
         write_float_buf(buf, 1.0)
 
-    # Faces
     write_int32_buf(buf, len(faces))
     for face_verts in faces:
         write_vector3_buf(buf, 0, 0, 1)  # face normal
@@ -119,7 +117,6 @@ def write_sobj(f, index=0, parent=-1, verts=None, faces=None, name="test", props
     f.write(buf)
 
 
-# Buffer helper functions
 def write_int32_buf(buf, value):
     buf.extend(struct.pack("<i", value))
 
@@ -206,7 +203,6 @@ def generate_truncated(output_path):
     with open(output_path, "wb") as f:
         f.write(POF_MAGIC)
         write_int32(f, VERSION)
-        # Only write partial OHDR
         write_uint32(f, fcc("OHDR"))
         write_int32(f, 100)  # claim 100 bytes but don't write them
 
@@ -218,7 +214,6 @@ def generate_hierarchical(output_path):
         write_int32(f, VERSION)
         write_ohdr(f, n_submodels=2, radius=2.0)
         write_txtr(f, ["hull", "turret"])
-        # Parent submodel
         write_sobj(
             f,
             index=0,
@@ -232,7 +227,6 @@ def generate_hierarchical(output_path):
             faces=[(0, 1, 2, 3)],
             name="hull",
         )
-        # Child submodel
         write_sobj(
             f,
             index=1,

@@ -1,5 +1,5 @@
 """
-Unit tests for texture-resolution helpers (descent3_importer/texutil.py).
+Unit tests for texture-resolution helpers (descent3_plugin/texutil.py).
 
 These cover the pure logic that maps a Descent 3 texture name to an image file
 on disk, without requiring Blender.
@@ -7,12 +7,12 @@ Run with: python -m pytest tests/test_texutil.py -v
 """
 
 import os
-import sys
 
-# Add the addon directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from texutil import clean_texture_dir, find_texture_image, IMAGE_EXTENSIONS
+from descent3_plugin.texutil import (
+    IMAGE_EXTENSIONS,
+    clean_texture_dir,
+    find_texture_image,
+)
 
 
 class TestCleanTextureDir:
@@ -50,10 +50,8 @@ class TestFindTextureImage:
         assert find_texture_image("Missing", [str(tmp_path)]) is None
 
     def test_case_insensitive(self, tmp_path):
-        # File on disk differs in case from the texture name. On a
-        # case-insensitive FS (Windows) the exact-stem fast path already
-        # resolves it; on a case-sensitive FS the listing fallback does.
-        # Either way a loadable path pointing at the file must come back.
+        # On a case-insensitive FS (Windows) the exact-stem fast path resolves
+        # this; on a case-sensitive one the listing fallback does.
         (tmp_path / "BlackPanel.PNG").write_bytes(b"x")
         result = find_texture_image("blackpanel", [str(tmp_path)])
         assert result is not None
@@ -73,7 +71,6 @@ class TestFindTextureImage:
         second.mkdir()
         (first / "Tex.png").write_bytes(b"x")
         (second / "Tex.png").write_bytes(b"x")
-        # first dir listed first -> its copy wins
         result = find_texture_image("Tex", [str(first), str(second)])
         assert result == str(first / "Tex.png")
 

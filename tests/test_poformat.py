@@ -3,105 +3,69 @@ Unit tests for the POF binary parser and writer.
 Run with: python -m pytest tests/test_poformat.py -v
 """
 
+import io
 import os
-import sys
 import struct
+
 import pytest
 
-# Add the addon directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
-
-from poformat import (
-    POFModel,
-    Submodel,
-    SubmodelVertex,
-    ModelFace,
-    FaceVertex,
-    GunBank,
-    WeaponBattery,
+from descent3_plugin.mathutil import Vector3
+from descent3_plugin.poformat import (
     AttachPoint,
-    Vector3,
-    Color,
+    GunBank,
+    MAX_SUBMODEL_INDEX,
+    OBJFILE_VERSION,
+    POFModel,
     POFReader,
     POFWriter,
-    parse_pof,
-    write_pof,
     POF_MAGIC,
-    OBJFILE_VERSION,
-    MIN_OBJFILE_VERSION,
-    CHUNK_OHDR,
-    CHUNK_TXTR,
-    CHUNK_SOBJ,
-    CHUNK_GPNT,
-    CHUNK_WBS,
-    CHUNK_ANIM,
-    CHUNK_PANI,
-    CHUNK_GRND,
-    CHUNK_ATCH,
-    SOF_ROTATE,
     SOF_TURRET,
-    SOF_GLOW,
-    SOF_THRUSTER,
-    SOF_FACING,
-    SOF_JITTER,
-    PMF_ALPHA,
-    PMF_TIMED,
+    Submodel,
+    SubmodelVertex,
+    parse_pof,
+    parse_pof_stream,
+    write_pof,
 )
 
 MOCK_DIR = os.path.join(os.path.dirname(__file__), "mock_data")
 
 
-class TestVector3:
-    def test_creation(self):
-        v = Vector3(1.0, 2.0, 3.0)
-        assert v.x == 1.0
-        assert v.y == 2.0
-        assert v.z == 3.0
+class ParserSpun(RuntimeError):
+    """A parse read far more than its input could possibly justify."""
 
-    def test_add(self):
-        v1 = Vector3(1, 2, 3)
-        v2 = Vector3(4, 5, 6)
-        result = v1 + v2
-        assert result.x == 5
-        assert result.y == 7
-        assert result.z == 9
 
-    def test_sub(self):
-        v1 = Vector3(5, 6, 7)
-        v2 = Vector3(1, 2, 3)
-        result = v1 - v2
-        assert result.x == 4
-        assert result.y == 4
-        assert result.z == 4
+class BudgetedStream(io.BytesIO):
+    """A stream that ends a runaway parse instead of letting it hang the suite.
 
-    def test_mul(self):
-        v = Vector3(1, 2, 3)
-        result = v * 2
-        assert result.x == 2
-        assert result.y == 4
-        assert result.z == 6
+    A negative chunk length seeks back onto the header just read and
+    ``parse_pof_stream`` re-reads it forever, so a plain ``pytest.raises`` would
+    wedge the run at 100% CPU rather than fail. A spinning parse burns two reads
+    per revolution, so any budget above a sound parse's needs trips it at once.
+    """
 
-    def test_magnitude(self):
-        v = Vector3(3, 4, 0)
-        assert v.magnitude() == pytest.approx(5.0)
+    def __init__(self, data: bytes, budget: int = 500) -> None:
+        super().__init__(data)
+        self._reads_left = budget
 
-    def test_normalized(self):
-        v = Vector3(3, 0, 0)
-        n = v.normalized()
-        assert n.x == pytest.approx(1.0)
-        assert n.y == pytest.approx(0.0)
-        assert n.z == pytest.approx(0.0)
+    def read(self, *args, **kwargs):
+        self._reads_left -= 1
+        if self._reads_left < 0:
+            raise ParserSpun("parser made no forward progress")
+        return super().read(*args, **kwargs)
 
-    def test_normalized_zero(self):
-        v = Vector3(0, 0, 0)
-        n = v.normalized()
-        assert n.x == 0
-        assert n.y == 0
-        assert n.z == 0
 
-    def test_as_tuple(self):
-        v = Vector3(1, 2, 3)
-        assert v.as_tuple() == (1.0, 2.0, 3.0)
+def _pof_header() -> bytes:
+    """Return the 8-byte file header every crafted fixture below starts with."""
+    return POF_MAGIC + struct.pack("<i", OBJFILE_VERSION)
+
+
+def _chunk_header(tag: bytes, length: int) -> bytes:
+    """Return a chunk header for ``tag`` declaring a body of ``length`` bytes.
+
+    Chunk IDs are the little-endian int of their four ASCII bytes, so the tag
+    lands in the file verbatim and can be spelled as bytes here.
+    """
+    return tag + struct.pack("<i", length)
 
 
 class TestPOFReader:
@@ -446,3 +410,273 @@ class TestEdgeCases:
         reparsed = parse_pof(data)
         assert len(reparsed.attach_points) == 1
         assert reparsed.attach_points[0].point.x == pytest.approx(1.0)
+
+
+class TestTruncatedTail:
+    """A file cut short mid-chunk-header must say so.
+
+    Chunk reading ends on EOFError, which is also how a well-formed file
+    finishes, so a truncated tail used to be indistinguishable from a clean end
+    and the model silently lost whatever the cut-off chunks held.
+    """
+
+    @staticmethod
+    def _valid_bytes():
+        model = POFModel(version=OBJFILE_VERSION, major_version=23)
+        model.textures = ["Hull"]
+        sm = Submodel(index=0, parent=-1, name="Root")
+        sm.vertices.append(SubmodelVertex(position=Vector3(1.0, 2.0, 3.0)))
+        model.submodels.append(sm)
+        return write_pof(model)
+
+    def test_clean_file_warns_nothing(self, caplog):
+        data = self._valid_bytes()
+        with caplog.at_level("WARNING"):
+            parse_pof(data)
+        assert "trailing" not in caplog.text
+
+    @pytest.mark.parametrize("extra", [1, 3, 7])
+    def test_truncated_header_warns(self, caplog, extra):
+        """1-7 leftover bytes cannot be a chunk header (which needs 8)."""
+        data = self._valid_bytes() + b"\x00" * extra
+        with caplog.at_level("WARNING"):
+            model = parse_pof(data)
+        assert "truncated" in caplog.text.lower()
+        assert f"{extra} trailing byte" in caplog.text
+        # Still returns what it managed to read, rather than raising.
+        assert len(model.submodels) == 1
+
+    def test_truncation_does_not_lose_earlier_chunks(self, caplog):
+        data = self._valid_bytes() + b"\x01\x02\x03"
+        with caplog.at_level("WARNING"):
+            model = parse_pof(data)
+        assert model.textures == ["Hull"]
+        assert model.submodels[0].name == "Root"
+
+
+class TestChunkLengthGuard:
+    """A chunk length is signed and comes straight off disk.
+
+    At -8 ``chunk_end`` equals the offset of the header being read, so the parse
+    loop re-reads that header forever on Blender's main thread with no cancel.
+    Every case here runs on a :class:`BudgetedStream` so a regression fails
+    rather than hangs. A length running past the end of the file gets the
+    opposite treatment -- see :class:`TestOverrunningChunkLength`.
+    """
+
+    @pytest.mark.parametrize("length", [-8, -1, -12, -(1 << 30)])
+    def test_negative_length_is_rejected_and_cannot_spin(self, length):
+        data = _pof_header() + _chunk_header(b"JUNK", length)
+        with pytest.raises(ValueError):
+            parse_pof_stream(BudgetedStream(data))
+
+    def test_empty_unknown_chunk_still_parses(self):
+        """Zero is a legal length: the header alone is forward progress."""
+        data = _pof_header() + _chunk_header(b"JUNK", 0)
+        model = parse_pof_stream(BudgetedStream(data))
+        assert model.submodels == []
+
+    def test_a_well_formed_file_is_unaffected(self):
+        """The guard must not cost a legitimate file its chunks."""
+        path = os.path.join(MOCK_DIR, "hierarchical.pof")
+        with open(path, "rb") as f:
+            model = parse_pof_stream(BudgetedStream(f.read(), budget=10000))
+        assert len(model.submodels) == 2
+        assert model.textures == ["hull", "turret"]
+
+
+class TestOverrunningChunkLength:
+    """A chunk body that is not in the file ends the chunk list.
+
+    Eight or more junk bytes on the end of a good model read as a chunk header
+    whose body is not there, and so does a file cut short by a failed copy.
+    Every chunk before that point parsed, so validating this length the way the
+    negative one is validated made imports that used to work fail completely.
+    """
+
+    @staticmethod
+    def _valid_bytes():
+        model = POFModel(version=OBJFILE_VERSION, major_version=23)
+        model.textures = ["Hull"]
+        sm = Submodel(index=0, parent=-1, name="Root")
+        sm.vertices.append(SubmodelVertex(position=Vector3(1.0, 2.0, 3.0)))
+        model.submodels.append(sm)
+        return write_pof(model)
+
+    @pytest.mark.parametrize(
+        "tail",
+        [
+            b"JUNKJUNK",                            # reads as a huge length
+            struct.pack("<Ii", 0x4B4E554A, 4096),   # a plausible-looking header
+        ],
+    )
+    def test_trailing_junk_keeps_the_chunks_that_parsed(self, caplog, tail):
+        with caplog.at_level("WARNING"):
+            model = parse_pof(self._valid_bytes() + tail)
+        assert model.textures == ["Hull"]
+        assert len(model.submodels) == 1
+        assert model.submodels[0].name == "Root"
+        assert "truncated" in caplog.text.lower()
+
+    def test_truncated_body_keeps_the_chunks_that_parsed(self, caplog):
+        """A file cut short mid-body, not mid-header."""
+        data = _pof_header() + _chunk_header(b"JUNK", 64) + b"\x00" * 16
+        with caplog.at_level("WARNING"):
+            model = parse_pof_stream(BudgetedStream(data))
+        assert model.submodels == []
+        assert "truncated" in caplog.text.lower()
+
+    def test_a_body_that_exactly_fits_is_not_truncated(self, caplog):
+        """The boundary: length == bytes remaining is a complete chunk."""
+        data = _pof_header() + _chunk_header(b"JUNK", 4) + b"\x00" * 4
+        with caplog.at_level("WARNING"):
+            parse_pof_stream(BudgetedStream(data))
+        assert "truncated" not in caplog.text.lower()
+
+
+class TestSubmodelIndexGuard:
+    """A SOBJ index is used to place the submodel in a list.
+
+    A negative one does not raise, it overwrites: the growth loop never runs and
+    ``submodels[-1] = sm`` replaces the submodel parsed before it. No ``None``
+    is left behind, so the missing-submodel warning never fires and the children
+    of the overwritten submodel lose their parent and land at the model origin.
+    """
+
+    @staticmethod
+    def _two_submodels() -> bytes:
+        model = POFModel(version=OBJFILE_VERSION, major_version=23)
+        model.textures = ["Hull"]
+        model.submodels.append(Submodel(index=0, parent=-1, name="Root"))
+        model.submodels.append(Submodel(index=1, parent=0, name="Turret"))
+        return write_pof(model)
+
+    @staticmethod
+    def _patch_last_index(data: bytes, index: int) -> bytes:
+        """Rewrite the index field of the last SOBJ record in ``data``.
+
+        Chunk tags survive into the file as their four ASCII bytes, so the
+        record is found by searching for the tag rather than by re-implementing
+        the chunk walk. The index is the first field of the body, i.e. eight
+        bytes past the tag -- a 4-byte tag and a 4-byte length.
+        """
+        field = data.rindex(b"SOBJ") + 8
+        return data[:field] + struct.pack("<i", index) + data[field + 4:]
+
+    def test_fixture_is_what_the_patch_assumes(self):
+        model = parse_pof(self._two_submodels())
+        assert [sm.name for sm in model.submodels] == ["Root", "Turret"]
+        assert model.submodels[1].index == 1
+
+    def test_patch_helper_rewrites_the_index(self):
+        model = parse_pof(self._patch_last_index(self._two_submodels(), 3))
+        assert model.submodels[-1].index == 3
+        assert model.submodels[-1].name == "Turret"
+
+    @pytest.mark.parametrize("index", [-1, -2, -(1 << 30)])
+    def test_negative_index_is_rejected(self, index):
+        data = self._patch_last_index(self._two_submodels(), index)
+        with pytest.raises(ValueError, match="submodel index"):
+            parse_pof(data)
+
+    def test_negative_index_no_longer_overwrites_a_parsed_submodel(self):
+        """The old failure mode: two SOBJ records, one submodel, no warning."""
+        data = self._patch_last_index(self._two_submodels(), -1)
+        try:
+            model = parse_pof(data)
+        except ValueError:
+            return
+        assert [sm.name for sm in model.submodels] == ["Root", "Turret"], (
+            "a SOBJ record silently replaced an already-parsed submodel"
+        )
+
+    def test_index_past_the_ceiling_is_rejected(self):
+        """An index is a list length, so it cannot be taken on trust."""
+        data = self._patch_last_index(self._two_submodels(), MAX_SUBMODEL_INDEX + 1)
+        with pytest.raises(ValueError, match="submodel index"):
+            parse_pof(data)
+
+    def test_ceiling_itself_is_accepted(self):
+        """The bound is deliberately far looser than the engine's own limit."""
+        data = self._patch_last_index(self._two_submodels(), MAX_SUBMODEL_INDEX)
+        model = parse_pof(data)
+        assert model.submodels[-1].index == MAX_SUBMODEL_INDEX
+
+
+class TestReadCount:
+    """Counts decide how long a loop runs and how big a list gets.
+
+    A negative one silently skips its loop and leaves every later read
+    misaligned; an enormous one allocates until a short read stops it. The
+    ceiling is the file's own size, so a large but honest model is never
+    refused.
+    """
+
+    @staticmethod
+    def _reader(count: int, payload: bytes = b"") -> POFReader:
+        return POFReader(io.BytesIO(struct.pack("<i", count) + payload))
+
+    def test_rejects_a_negative_count(self):
+        with pytest.raises(ValueError, match="vertex count"):
+            self._reader(-1).read_count("vertex")
+
+    def test_rejects_more_records_than_the_stream_can_hold(self):
+        # Three 12-byte records need 36 bytes; only 24 follow the count.
+        with pytest.raises(ValueError, match="vertex count"):
+            self._reader(3, b"\x00" * 24).read_count("vertex", 12)
+
+    def test_accepts_an_exact_fit(self):
+        assert self._reader(2, b"\x00" * 24).read_count("vertex", 12) == 2
+
+    def test_zero_needs_no_bytes_at_all(self):
+        assert self._reader(0).read_count("vertex", 12) == 0
+
+    def test_leaves_the_stream_positioned_after_the_count(self):
+        reader = self._reader(1, b"abcd")
+        assert reader.read_count("thing", 4) == 1
+        assert reader.read_bytes(4) == b"abcd"
+
+
+class TestCorruptCountsInChunks:
+    """The count guards, reached the way a real file reaches them."""
+
+    def test_impossible_texture_count(self):
+        body = struct.pack("<i", 2 ** 31 - 1)
+        data = _pof_header() + _chunk_header(b"TXTR", len(body)) + body
+        with pytest.raises(ValueError, match="texture count"):
+            parse_pof_stream(BudgetedStream(data))
+
+    def test_negative_texture_count(self):
+        body = struct.pack("<i", -3)
+        data = _pof_header() + _chunk_header(b"TXTR", len(body)) + body
+        with pytest.raises(ValueError, match="texture count"):
+            parse_pof_stream(BudgetedStream(data))
+
+    def test_negative_detail_count(self):
+        body = struct.pack("<i", 1) + struct.pack("<f", 1.0)
+        body += struct.pack("<fff", 0, 0, 0) + struct.pack("<fff", 0, 0, 0)
+        body += struct.pack("<i", -1)
+        data = _pof_header() + _chunk_header(b"OHDR", len(body)) + body
+        with pytest.raises(ValueError, match="detail level count"):
+            parse_pof_stream(BudgetedStream(data))
+
+
+class TestBytesRemaining:
+    def test_counts_from_the_current_position(self):
+        reader = POFReader(io.BytesIO(b"0123456789"))
+        assert reader.bytes_remaining() == 10
+        reader.read_bytes(4)
+        assert reader.bytes_remaining() == 6
+
+    def test_restores_the_position(self):
+        reader = POFReader(io.BytesIO(b"0123456789"))
+        reader.read_bytes(4)
+        before = reader.tell()
+        reader.bytes_remaining()
+        assert reader.tell() == before
+        assert reader.read_bytes(2) == b"45"
+
+    def test_zero_at_end(self):
+        reader = POFReader(io.BytesIO(b"abc"))
+        reader.read_bytes(3)
+        assert reader.bytes_remaining() == 0

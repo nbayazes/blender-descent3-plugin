@@ -7,6 +7,9 @@ Unlike ``generate_mock_pof.py`` (which hand-writes bytes), this uses the real
 ``poformat.write_pof`` writer so the .oof matches the genuine on-disk format
 (length-prefixed, NUL-terminated strings, v23 layout).
 
+One-shot generator: the output is tracked in git and the tests read those
+checked-in files directly, so re-run this only to change the fixture itself.
+
 Run:  python tests/generate_fixtures.py
 Output: tests/fixtures/textured_model/{textured_cube.oof, Hull.png, Turret.png}
 """
@@ -16,15 +19,16 @@ import struct
 import sys
 import zlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "descent3_importer"))
+# Run as a script, so the repo root is not on sys.path automatically.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from poformat import (  # noqa: E402
+from descent3_plugin.mathutil import Vector3  # noqa: E402
+from descent3_plugin.poformat import (  # noqa: E402
     POFModel,
     Submodel,
     SubmodelVertex,
     ModelFace,
     FaceVertex,
-    Vector3,
     write_pof,
 )
 

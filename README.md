@@ -2,28 +2,87 @@
 
 A Blender add-on for importing and exporting Descent 3 polygon model files
 (`.pof` / `.oof`). It supports vertices, faces, UV mapping, materials with
-image textures, the submodel hierarchy, gun points, attach points, and animation
-keyframes.
+image textures, the submodel hierarchy, gun points and attach points.
 
 - **Blender:** 4.2+ (developed and tested against 5.2 LTS)
 - **Location in Blender:** `File → Import/Export → Descent 3 POF/OOF (.pof, .oof)`
 
+> **What a round trip loses.** Some of what the parser reads never reaches
+> Blender and is never written back out, so importing a model and exporting it
+> destroys it — silently, with nothing logged and no warning reported. Keep the
+> file you imported.
+>
+> - **Animation keyframes** — export writes no `ANIM` or `PANI` chunk, so every
+>   rotation and position key, every track start and the frame range are gone
+>   from the exported model. The keys *are* read from the file, but nothing is
+>   done with them: no action, no F-curve, nothing to see or edit in Blender.
+>   There is no way to author animation for a model here either.
+> - **Weapon batteries** — the `WBAT` grouping of gun points with the turrets
+>   that aim them is not written. The gun-point empties come back, so nothing
+>   looks wrong, but the model no longer tells the engine which turret aims
+>   which bank.
+> - **Per-vertex alpha** — every vertex exports opaque, so a transparent canopy
+>   or grate round-trips solid.
+> - **Untextured face colours** — a flat-coloured face's RGB is not imported and
+>   exports as mid-grey. In a submodel that also has textured faces it is worse:
+>   the face adopts the first texture material and exports wearing it.
+> - **Ground planes** — the `GRND` points and normals are dropped whole.
+>
+> Lost less visibly: each submodel's geometric centre and separation plane, and
+> a face's authored normal wherever it disagrees with the winding. A model built
+> from scratch in Blender never had any of this, so only models imported from an
+> existing file are affected. [Importing](docs/importing.md) covers what this
+> means in the scene, [Design notes](docs/design-notes.md) why the parser reads
+> it all anyway — and the handful of fields a plain parse → write drops one
+> layer lower, before Blender is involved at all.
+
+## Documentation
+
+- [Importing](docs/importing.md) — viewport shading, material reuse, damaged
+  files, marker orientation, what the file carries that never reaches the scene.
+- [Exporting](docs/exporting.md) — which objects become submodels, transforms and
+  authored normals, offsets, marker selection and ordering, material names as
+  texture IDs, writing texture images.
+- [How textures are located](docs/textures.md) — the four search directories and
+  their priority, extension order, case-insensitive fallback, missing textures.
+- [Custom properties](docs/custom-properties.md) — the `pof_*` and `d3_*` keys,
+  which datablock carries each, what export reads back, which to set by hand.
+- [Configuration](docs/configuration.md) — `descent3.toml` project settings,
+  per-user add-on preferences, and the format constants that are not settings.
+- [Development](docs/development.md) — the `bpy`-free contract, the test runners
+  and Blender's own Python, the tests that need Blender, the manifest, versioning.
+- [Design notes](docs/design-notes.md) — the coordinate rotation, the separate
+  UV flip, what the custom properties carry, round-trip fidelity, why the parser
+  reads more than the scene surfaces.
+
 ## Installation
 
 > **Important:** the add-on must be installed as a **package folder**, not as
-> loose files. It uses a relative import (`from . import poformat`), so the
-> three modules have to sit together inside a `descent3_importer/` directory:
+> loose files. It uses relative imports (`from . import poformat`), so all
+> eleven modules have to sit together inside a `descent3_plugin/` directory,
+> along with the manifest:
 >
 > ```
-> scripts/addons/descent3_importer/
+> scripts/addons/descent3_plugin/
 >   ├── __init__.py
+>   ├── blender_manifest.toml
+>   ├── config.py
+>   ├── constants.py
+>   ├── export_pof.py
+>   ├── import_pof.py
+>   ├── mathutil.py
+>   ├── naming.py
 >   ├── poformat.py
+>   ├── preferences.py
+>   ├── texexport.py
 >   └── texutil.py
 > ```
 >
-> If the `.py` files are dropped directly into `scripts/addons/`, Blender cannot
-> load the package — the import/export operators never register and Blender warns
-> that `poformat.py` is "missing `bl_info`".
+> Dropped directly into `scripts/addons/`, the loose `.py` files cannot load as
+> a package — the import/export operators never register and Blender warns that
+> `poformat.py` is "missing `bl_info`". Leaving *one* module behind is quieter
+> and just as fatal: a `ModuleNotFoundError` naming a file you may not have
+> known existed. Copy the folder, not its contents.
 
 ### Option 1 — install script (recommended)
 
@@ -46,164 +105,102 @@ version's user add-ons directory. Run from the repo root:
 ./install.sh
 ```
 
-If Blender lives somewhere unusual, skip detection with
-`-Target` / `--target` and pass either a version root
-(`…/Blender/5.2`) or an add-ons directory directly.
-
-Steam and standalone Blender share the same user config directory, so a given
-version only needs installing once no matter where the executable lives.
-
+If Blender lives somewhere unusual, skip detection with `-Target` / `--target`
+and pass either a version root (`…/Blender/5.2`) or an add-ons directory
+directly. Steam and standalone Blender share the same user config directory, so
+a given version only needs installing once no matter where the executable lives.
 The scripts always copy the whole package folder, clear stale `__pycache__`, and
-warn about the loose-file mistake described above.
+warn about the loose-file mistake above.
 
 ### Option 2 — install by hand
 
-1. Zip the `descent3_importer/` folder (so the zip contains the folder, not just
+1. Zip the `descent3_plugin/` folder (so the zip contains the folder, not just
    its files).
 2. In Blender: `Edit → Preferences → Add-ons → Install from Disk…`, choose the
    zip, then enable **"Import-Export: Descent 3 POF/OOF Importer/Exporter"**.
 
-Alternatively, copy the `descent3_importer/` folder straight into your Blender
-`scripts/addons/` directory and enable it in Preferences.
-
-Either way, after updating the files **restart Blender** (or toggle the add-on
-off/on) so the new code loads.
+Alternatively, copy the `descent3_plugin/` folder straight into your Blender
+`scripts/addons/` directory and enable it in Preferences. Either way, after
+updating the files **restart Blender** (or toggle the add-on off/on) so the new
+code loads.
 
 ## Importing
 
-`File → Import → Descent 3 POF/OOF (.pof)`. Options in the file browser sidebar:
+`File → Import → Descent 3 POF/OOF (.pof)`.
+
+![The Descent 3 import dialog: a Blender file browser listing .OOF models, with Import Gun Points, Import Attach Points and Texture Folder in the right-hand sidebar](docs/images/import-dialog.png)
+
+Options live in the file browser sidebar:
 
 | Option | Description |
 |--------|-------------|
 | **Import Gun Points** | Import gun-point markers as empty objects |
 | **Import Attach Points** | Import attach points as empty objects |
-| **Texture Folder** | Optional folder to search for texture images (see below). Leave empty to use only the model's own folder |
+| **Texture Folder** | Optional folder to search for texture images, ahead of everywhere else (see [How textures are located](docs/textures.md)). Leave it empty and the search falls back to the project's `descent3.toml`, the model's own folder, and your Texture Library preference |
 
-Imported textures show up as materials with an image texture wired into the
-Principled BSDF's Base Color. If a model looks flat/untextured in the viewport,
-switch viewport shading to **Material Preview** — *Solid* mode does not display
-image textures.
+More in [docs/importing.md](docs/importing.md) — and in
+[docs/textures.md](docs/textures.md) for how a texture name becomes a file.
 
 ## Exporting
 
-`File → Export → Descent 3 POF/OOF (.pof)`. Choose the POF version (v23.00 is
-Descent 3 retail), and whether to export only selected objects, gun points, and
-attach points. Material names are written to the model's texture table, so name
-your materials after the Descent 3 textures you want the faces to reference.
+`File → Export → Descent 3 POF/OOF (.pof)`.
 
-## How textures are located
+![The Descent 3 export dialog. POF Version and Textures are both set to "From project config"; Selected Only, Export Gun Points and Export Attach Points are ticked. The file listing shows an exported_textures folder written beside Untitled.pof](docs/images/export-dialog.png)
 
-Descent 3 models do **not** store image files. The model's `TXTR` chunk holds a
-list of **texture names** (e.g. `WarningStripe`, `ConcussionMissile`), and each
-face references one of those names by index. On import, the add-on has to turn
-each name into an actual image file on disk.
+| Option | Description |
+|--------|-------------|
+| **POF Version** | Which format version to write. Leave it on *From project config* and the version in your `descent3.toml` applies; pick a specific one to override it for this export. The version of an imported file is *not* remembered — it is logged at import and nowhere else, so a v18.07 model re-exports at whatever this setting says |
+| **Selected Only** | Export only the selected objects rather than every mesh in the file. It bounds the gun and attach markers too, not just the meshes (see [Exporting](docs/exporting.md#what-gets-exported)) |
+| **Export Gun Points** | Write empties named with the gun prefix as GPNT gun points |
+| **Export Attach Points** | Write empties named with the attach prefix as ATCH attach points |
+| **Textures** | Also write each material's image beside the model. *None* by default; *From project config* uses `texture_format` from your `descent3.toml` |
 
-### Search directories and their priority
+More in [docs/exporting.md](docs/exporting.md): what gets exported, how material
+names become texture IDs, and what the **Textures** option writes.
 
-The importer builds an ordered list of directories to search, then looks each
-texture name up in them:
+## Seeing what the add-on is doing
 
-1. **Texture Folder** — if you entered one in the import options *and it exists*,
-   it is searched **first**.
-2. **The model's own directory** — the folder that contains the `.oof`/`.pof`
-   file you are importing (`os.path.dirname(os.path.abspath(filepath))`), always
-   searched, and always **last**.
+Most of what the add-on has to tell you — a texture it could not find, a
+material that looks like a Blender duplicate, a file the parser refuses part-way
+through — goes to Blender's system console. The status bar shows only the last
+line, so open the console before investigating anything.
 
-The first directory that yields a match wins.
+`Window → Toggle System Console`
 
-### When no Texture Folder is provided (the default)
+![Blender's Window menu open, with the Toggle System Console item highlighted](docs/images/system-console.png)
 
-With the **Texture Folder** field left empty, the search list contains exactly
-one entry: **the model's own directory**. In other words, the importer looks for
-each texture's image file *right next to the model file* and nowhere else.
+On Linux and macOS there is no menu item: Blender is already attached to the
+terminal that launched it, so start it from one and the output appears there.
 
-- The lookup directory is derived from the file you picked in the import dialog,
-  resolved to an absolute path. If you import
-  `D:\descent3\models\pyro.oof`, the texture directory is `D:\descent3\models\`.
-- Each texture **name** is treated as a **file stem** in that directory. The
-  importer appends each supported image extension, in this order, and uses the
-  first file that exists:
-
-  ```
-  .png  .bmp  .tga  .jpg  .jpeg  .ogf  .pcx
-  ```
-
-  So for a texture named `ConcussionMissile` it tries
-  `ConcussionMissile.png`, then `ConcussionMissile.bmp`, and so on.
-
-- If no exact filename matches, it falls back to a **case-insensitive** scan of
-  the directory listing: any file whose name (ignoring case) is
-  `<texturename>.<ext>` for a supported `<ext>` is accepted. This covers the
-  common case where the model stores `blackpanel` but the file on disk is
-  `BlackPanel.png`. (On Windows the filesystem is already case-insensitive, so
-  the exact-name step usually resolves it; the fallback matters on
-  case-sensitive filesystems.)
-
-- The search is **not recursive** — only the model's immediate directory is
-  looked at, never its subfolders or parents.
-
-- The comparison is **exact on the stem** (apart from case). A texture named
-  `Hull` matches `Hull.png` but not `Hull_01.png`, `metal_Hull.png`, or
-  `Hull.001.png`.
-
-**Practical consequence:** the simplest setup is to keep a model's `.oof` and all
-of its `.png` (or other supported) textures in one folder. Import the `.oof` from
-there with the Texture Folder left blank, and every texture resolves
-automatically.
-
-### When a Texture Folder *is* provided
-
-Use this when your models and textures live in different folders — common with
-Descent 3 assets extracted from `.hog` archives. The value you enter is:
-
-- Cleaned of surrounding whitespace and quotes (so a Windows
-  *"Copy as path"* value like `"D:\tex\folder"` works when pasted).
-- Resolved with Blender's path rules (`//`-relative paths are made absolute).
-- Searched **before** the model's own directory, using the same per-directory
-  rules (exact extension order, then the case-insensitive fallback).
-
-If the folder you enter does not exist, it is ignored (with a warning in the
-console) and the importer falls back to the model's own directory.
-
-> The **Texture Folder** field is a plain text box you paste a path into — it has
-> no "browse" button. Blender only allows one file-selector dialog at a time, and
-> the import file browser already occupies it, so a folder-picker cannot be
-> opened from inside the import dialog.
-
-### When a texture cannot be found
-
-If none of the search directories contain a matching image, the importer still
-creates a material named after the texture — it just has no image attached
-(a plain Principled BSDF). Missing textures are reported so they are not silent:
-
-- The import finishes with a status message such as
-  `Imported pyro: 3 submodels, 5/7 textures — missing textures: X, Y`.
-- The system console (`Window → Toggle System Console`) shows a
-  `[Descent3] … textures N/M found (missing: …)` summary and the exact
-  directories that were searched.
-
-### Resolution at a glance
+Typical output for a healthy import:
 
 ```
-for each texture name referenced by the model's faces:
-    for each directory in [Texture Folder (if set & exists), model directory]:
-        try name + ".png", ".bmp", ".tga", ".jpg", ".jpeg", ".ogf", ".pcx"   → first hit wins
-        else scan directory for a case-insensitive  name.<supported-ext>       → first hit wins
-    if nothing matched anywhere:
-        create a blank material named after the texture and report it missing
+[Descent3] Importing: C:\models\Hellion.oof
+[Descent3] v2300: 2 textures, 1 submodels; texture search: [...]
+[Descent3] textures 2/2 found
 ```
 
-Supported extensions and their priority order are defined by
-`IMAGE_EXTENSIONS` in `descent3_importer/texutil.py`.
+and for one that needs attention:
 
-## Development
-
-The parsing/writing (`poformat.py`) and texture-path logic (`texutil.py`) have
-**no `bpy` dependency**, so they can be unit-tested with plain Python:
-
-```bash
-python -m pytest tests/ -q
 ```
+[descent3_plugin] Texture not found: Hull (searched [...])
+[descent3_plugin] Configured texture directory does not exist: E:\d3\textures
+```
+
+The duplicate-material warning is an **export** one — import never raises it:
+
+```
+[descent3_plugin] Material 'Hull.001' looks like a Blender duplicate ...
+```
+
+Every module logs under the one `descent3_plugin` name, so that prefix is what
+to grep the console for — there is no per-module tag to guess at.
+
+## Licence
+
+GPL-3.0-or-later — see `LICENSE`. The add-on redistributes the Descent 3
+engine sources under `reference/`, which are GPL-3.0-or-later, © 2024
+Parallax Software.
 
 Test assets:
 
@@ -221,10 +218,35 @@ the `.claude/skills/blender-addon-testing` skill for the workflow, and
 ## Repository layout
 
 ```
-descent3_importer/      the add-on (install this folder)
-  __init__.py           operators, import/export, Blender integration
+descent3_plugin/      the add-on (install this folder)
+  __init__.py           registration and menu entries (no bpy at import time)
+  import_pof.py         ImportPOF operator and POF -> Blender conversion
+  export_pof.py         ExportPOF operator and Blender -> POF conversion
+  texexport.py          writing texture images beside an exported model
+  config.py             per-project descent3.toml settings (no bpy)
+  preferences.py        per-user add-on preferences
+  constants.py          values shared by the import and export halves (no bpy)
+  mathutil.py           Vector3 and math helpers (no bpy)
+  naming.py             material-name to texture-ID rules (no bpy)
   poformat.py           POF/OOF binary parser & writer (no bpy)
   texutil.py            texture-path resolution helpers (no bpy)
+  blender_manifest.toml canonical version + extension metadata
+descent3.example.toml   documented template for a project config
+install.ps1 install.sh  find every Blender and deploy the package folder
+run_tests.sh run_tests.ps1   run pytest under Blender's own Python
+docs/                   the long-form documentation
+  importing.md            material reuse, damaged files, marker orientation,
+                          what never reaches the scene
+  exporting.md            what is exported, texture names, texture images
+  textures.md             how a texture name becomes an image file on import
+  custom-properties.md    the pof_* and d3_* keys and what export reads back
+  configuration.md        descent3.toml, add-on preferences, format constants
+  development.md          the bpy-free contract, the tests, versioning
+  design-notes.md         decisions and the reasoning behind them
+  images/                 screenshots used by this README and those pages
+LICENSE                 GPL-3.0-or-later
 tests/                  pytest suite, mock data, and fixtures
-polymodel.{cpp,h}       Descent 3 source reference for the format
+reference/              vendored Descent 3 engine sources (GPL-3, not installed)
+.claude/skills/         reference notes for the headless test workflow and the
+                        binary format
 ```

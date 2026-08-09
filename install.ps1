@@ -5,10 +5,10 @@
 .DESCRIPTION
     Finds every Blender install on this machine -- Steam (via libraryfolders.vdf),
     standalone installers, portable/unzipped builds, winget, and anything already on
-    PATH -- works out each one's major.minor version, and copies the descent3_importer
+    PATH -- works out each one's major.minor version, and copies the descent3_plugin
     package folder into that version's user add-ons directory:
 
-        %APPDATA%\Blender Foundation\Blender\<version>\scripts\addons\descent3_importer\
+        %APPDATA%\Blender Foundation\Blender\<version>\scripts\addons\descent3_plugin\
 
     The add-on MUST be installed as a package folder (it uses `from . import poformat`),
     so this script always copies the whole folder, never loose files.
@@ -28,13 +28,13 @@
 .PARAMETER Target
     Install into an explicit path, skipping detection. Accepts a version root
     (...\Blender\5.2), an add-ons directory (...\scripts\addons), or an existing
-    ...\scripts\addons\descent3_importer folder.
+    ...\scripts\addons\descent3_plugin folder.
 
 .PARAMETER DryRun
     Print what would be copied without touching the filesystem.
 
 .PARAMETER Clean
-    Delete the destination descent3_importer folder before copying, and remove any
+    Delete the destination descent3_plugin folder before copying, and remove any
     loose add-on .py files sitting directly in scripts\addons (a known bad install
     state that stops the add-on from loading).
 
@@ -61,8 +61,24 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$AddonId       = 'descent3_importer'
-$RequiredFiles = @('__init__.py', 'poformat.py', 'texutil.py')
+$AddonId = 'descent3_plugin'
+
+# The two files whose absence means this is not the add-on source at all:
+# __init__.py is what makes the folder a package (the add-on uses
+# `from . import poformat`), and blender_manifest.toml is what Blender 4.2+
+# reads to treat the folder as an extension -- it sat in the repo unshipped for
+# its whole life because the copy step filtered on '*.py' only.
+#
+# Everything else that ships is read off the package folder by Get-PackageFiles
+# rather than restated here. A hardcoded module list is a second copy of the
+# package contents, and the copy that goes stale is always the one that quietly
+# stops installing the module nobody remembered to add to it.
+$CriticalFiles = @('__init__.py', 'blender_manifest.toml')
+
+# Package folder names this add-on used to ship under. They declare the same
+# operator bl_idnames, so leaving one in place next to the new folder gives the
+# user two File > Import entries and lets Blender pick either one.
+$LegacyAddonIds = @('descent3_importer')
 
 # ---------------------------------------------------------------- output helpers
 
@@ -82,7 +98,7 @@ function Get-SourceDir {
     if (-not (Test-Path -LiteralPath $src -PathType Container)) {
         throw "Add-on source folder not found: $src (run this script from the repo root)"
     }
-    foreach ($file in $RequiredFiles) {
+    foreach ($file in $CriticalFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $src $file) -PathType Leaf)) {
             throw "Add-on source is incomplete -- missing $file in $src"
         }
@@ -90,14 +106,28 @@ function Get-SourceDir {
     return (Resolve-Path -LiteralPath $src).Path
 }
 
+# Everything the add-on ships: the whole package folder as it stands, which is
+# the only description of it that cannot drift. Directories are skipped
+# (__pycache__ is the only one that ever appears, and stale bytecode is exactly
+# what must not travel), as is loose bytecode.
+function Get-PackageFiles {
+    param([string]$SourceDir)
+
+    return Get-ChildItem -LiteralPath $SourceDir -File |
+        Where-Object { $_.Extension -ne '.pyc' } |
+        Sort-Object Name
+}
+
+# blender_manifest.toml is the single source of truth for the version;
+# bl_info carries a literal copy only because Blender ast-parses it, and a
+# test fails the build if the two drift apart.
 function Get-AddonVersion {
     param([string]$SourceDir)
 
-    $initPath = Join-Path $SourceDir '__init__.py'
-    $match = [regex]::Match((Get-Content -LiteralPath $initPath -Raw), '"version"\s*:\s*\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)')
-    if ($match.Success) {
-        return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($match.Groups[3].Value)"
-    }
+    $manifestPath = Join-Path $SourceDir 'blender_manifest.toml'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return 'unknown' }
+    $match = [regex]::Match((Get-Content -LiteralPath $manifestPath -Raw), '(?m)^\s*version\s*=\s*"([^"]+)"')
+    if ($match.Success) { return $match.Groups[1].Value }
     return 'unknown'
 }
 
@@ -292,7 +322,7 @@ function Resolve-TargetPath {
     param([string]$Path)
 
     $leaf = Split-Path -Leaf $Path
-    if ($leaf -eq $AddonId)          { return (Split-Path -Parent $Path) }   # ...\addons\descent3_importer
+    if ($leaf -eq $AddonId)          { return (Split-Path -Parent $Path) }   # ...\addons\descent3_plugin
     if ($leaf -match '^\d+\.\d+$')   { return (Join-Path $Path 'scripts\addons') }  # ...\Blender\5.2
     return $Path                                                             # assume it is the addons dir
 }
@@ -303,20 +333,35 @@ function Install-Addon {
     param([string]$SourceDir, [string]$AddonsDir)
 
     $destination = Join-Path $AddonsDir $AddonId
+    $sourceFiles = @(Get-PackageFiles -SourceDir $SourceDir)
     Write-Step "Installing to $destination"
 
     # Loose .py files directly in scripts\addons break the package import and make the
     # operators silently fail to register. Flag them; -Clean removes them.
-    foreach ($file in $RequiredFiles) {
-        $loose = Join-Path $AddonsDir $file
+    foreach ($file in ($sourceFiles | Where-Object { $_.Extension -eq '.py' })) {
+        $loose = Join-Path $AddonsDir $file.Name
         if (Test-Path -LiteralPath $loose -PathType Leaf) {
             if ($Clean -and -not $DryRun) {
                 Remove-Item -LiteralPath $loose -Force
-                Write-Warn "removed stray loose file $file from scripts\addons"
+                Write-Warn "removed stray loose file $($file.Name) from scripts\addons"
             } elseif ($Clean) {
-                Write-Warn "would remove stray loose file $file from scripts\addons"
+                Write-Warn "would remove stray loose file $($file.Name) from scripts\addons"
             } else {
-                Write-Warn "stray loose file in scripts\addons: $file -- re-run with -Clean to remove it (it can stop the add-on loading)"
+                Write-Warn "stray loose file in scripts\addons: $($file.Name) -- re-run with -Clean to remove it (it can stop the add-on loading)"
+            }
+        }
+    }
+
+    # A folder from a previous package name is not an upgrade target -- it is a
+    # duplicate add-on. Always remove it, -Clean or not.
+    foreach ($legacy in $LegacyAddonIds) {
+        $legacyDir = Join-Path $AddonsDir $legacy
+        if (Test-Path -LiteralPath $legacyDir -PathType Container) {
+            if ($DryRun) {
+                Write-Warn "would remove previous add-on folder $legacyDir (renamed to $AddonId)"
+            } else {
+                Remove-Item -LiteralPath $legacyDir -Recurse -Force
+                Write-Warn "removed previous add-on folder $legacyDir (renamed to $AddonId)"
             }
         }
     }
@@ -329,9 +374,6 @@ function Install-Addon {
             Write-Note "deleted existing $destination"
         }
     }
-
-    $sourceFiles = Get-ChildItem -LiteralPath $SourceDir -Filter '*.py' -File |
-        Sort-Object Name
 
     if ($DryRun) {
         Write-Note "would create $destination"
@@ -352,16 +394,16 @@ function Install-Addon {
         Write-Note 'cleared __pycache__'
     }
 
-    # Modules removed from the repo but still sitting in the destination
+    # Files removed from the repo but still sitting in the destination
     $sourceNames = $sourceFiles | ForEach-Object { $_.Name }
-    Get-ChildItem -LiteralPath $destination -Filter '*.py' -File |
+    Get-ChildItem -LiteralPath $destination -File |
         Where-Object { $sourceNames -notcontains $_.Name } |
         ForEach-Object { Write-Warn "stale file left behind: $($_.Name) (use -Clean to remove)" }
 
-    # Sanity check
-    foreach ($file in $RequiredFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $destination $file) -PathType Leaf)) {
-            Write-Fail "verification failed -- $file is missing from $destination"
+    # Sanity check: everything we set out to copy is really there.
+    foreach ($file in $sourceFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $destination $file.Name) -PathType Leaf)) {
+            Write-Fail "verification failed -- $($file.Name) is missing from $destination"
             return $false
         }
     }
